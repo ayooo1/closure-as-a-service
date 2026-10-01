@@ -61,6 +61,48 @@ describe("buildPrompt", () => {
   });
 });
 
+describe("kinds of endings", () => {
+  it("defaults to a romantic breakup", () => {
+    const p = prompt();
+    expect(p).toMatch(/^Write a breakup message as/);
+    expect(p).toContain("End the romantic relationship. Make it unmistakable that it is over.");
+  });
+
+  it("writes a friendship ending as a friendship, never a romantic breakup", () => {
+    const p = prompt({ ending: "friendship", reason: "grown-apart", duration: "6-12-months" });
+    expect(p).toMatch(/^Write a message ending a friendship as/);
+    expect(p).toContain("never frame it as a romantic breakup");
+    expect(p).toContain("Acknowledge that this was a real friendship.");
+    expect(p).toContain("Main reason: We've grown apart.");
+    expect(prompt({ ending: "friendship", reason: "one-sided", duration: "few-dates" })).toContain("How long: Not long.");
+  });
+
+  it("makes a ghosting apology take responsibility and ask for nothing", () => {
+    const p = prompt({ ending: "ghosting-apology", reason: "avoided-conflict" });
+    expect(p).toMatch(/^Write an apology for ghosting someone as/);
+    expect(p).toContain("not asking to restart anything");
+    expect(p).toContain("Why they went quiet: I avoided a hard conversation.");
+  });
+
+  it("keeps a reply to a breakup dignified: no begging or bargaining", () => {
+    const p = prompt({ ending: "reply-to-breakup", reason: "ask-closure" });
+    expect(p).toMatch(/^Write a reply to being broken up with as/);
+    expect(p).toContain("no begging, bargaining, guilt-tripping");
+    expect(p).toContain("What they want to say: Ask for a little closure.");
+  });
+
+  it("gives a situationship proportionate weight", () => {
+    const p = prompt({ ending: "situationship", reason: "want-commitment" });
+    expect(p).toContain("without treating it like a long relationship");
+  });
+
+  it("passes the ending's goal to follow-ups too", () => {
+    const friend = QuestionnaireSchema.parse({ ending: "friendship", duration: "1-3-years", reason: "unhealthy", tone: "gentle", medium: "text" });
+    expect(buildRefinePrompt(friend, "Hi.", "shorter")).toContain("End the friendship");
+    expect(buildRepliesPrompt(friend, "Hi.")).toContain("End the friendship");
+  });
+});
+
 const q = QuestionnaireSchema.parse({
   duration: "1-3-years",
   reason: "different-goals",
@@ -72,7 +114,7 @@ const q = QuestionnaireSchema.parse({
 describe("follow-up prompts", () => {
   it("refine prompt applies the requested change to the fenced message, with context", () => {
     const p = buildRefinePrompt(q, "Sam, I'm ending things.", "without-reason");
-    expect(p).toContain("Remove the reason for the breakup entirely");
+    expect(p).toContain("Remove the reason or explanation entirely");
     expect(p).toContain("<message>\nSam, I'm ending things.\n</message>");
     expect(p).toContain("Address them as Sam.");
     expect(p).toContain("1–3 years");
@@ -85,7 +127,7 @@ describe("follow-up prompts", () => {
   });
 
   it("follow-up system prompts hold the decision and guard the fences", () => {
-    expect(REFINE_SYSTEM_PROMPT).toContain("Keep the decision unmistakable and final");
+    expect(REFINE_SYSTEM_PROMPT).toContain("Keep its goal from the context unmistakable");
     expect(REPLIES_SYSTEM_PROMPT).toContain("Write exactly 4 realistic, different replies");
     expect(REPLIES_SYSTEM_PROMPT).toContain("does not reopen the decision");
     expect(REPLIES_SYSTEM_PROMPT).toContain("abusive or threatening");

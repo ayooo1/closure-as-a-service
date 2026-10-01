@@ -48,6 +48,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 async function completeWizard(user: ReturnType<typeof userEvent.setup>, medium = "Text message") {
   // Steps animate in/out, so wait for each to appear (findBy) as a user would.
+  await user.click(await screen.findByLabelText("A relationship"));
   await user.click(await screen.findByLabelText("1–3 years"));
   await user.click(await screen.findByLabelText("We want different things"));
   await user.click(await screen.findByLabelText("Warm"));
@@ -75,6 +76,7 @@ describe("ClosureApp", () => {
 
     await completeWizard(user);
     expect(requests("/api/generate")[0]).toEqual({
+      ending: "relationship",
       duration: "1-3-years",
       reason: "different-goals",
       tone: "warm",
@@ -110,7 +112,7 @@ describe("ClosureApp", () => {
   it("tells the user their name and details aren't saved", async () => {
     const user = userEvent.setup();
     render(<ClosureApp />);
-    for (const label of ["1–3 years", "We want different things", "Warm", "Text message"]) {
+    for (const label of ["A relationship", "1–3 years", "We want different things", "Warm", "Text message"]) {
       await user.click(await screen.findByLabelText(label));
     }
     expect(await screen.findByText(/we don't save your name or details/i)).toBeInTheDocument();
@@ -197,6 +199,8 @@ describe("ClosureApp", () => {
     await completeWizard(user);
     await user.click(await screen.findByRole("button", { name: /start over/i }));
 
+    expect(await screen.findByLabelText("A relationship")).toBeChecked();
+    await user.click(screen.getByRole("button", { name: /next/i }));
     expect(await screen.findByLabelText("1–3 years")).toBeChecked();
     await user.click(screen.getByRole("button", { name: /next/i }));
     expect(await screen.findByLabelText("We want different things")).toBeChecked();
@@ -206,12 +210,61 @@ describe("ClosureApp", () => {
     const user = userEvent.setup();
     render(<ClosureApp />);
 
-    await user.click(screen.getByLabelText("6–12 months"));
+    await user.click(screen.getByLabelText("A relationship"));
+    await user.click(await screen.findByLabelText("6–12 months"));
     expect(await screen.findByRole("group", { name: /main reason/i })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /back/i }));
 
     expect(await screen.findByLabelText("6–12 months")).toBeChecked();
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "2");
+  });
+});
+
+describe("kinds of endings", () => {
+  it("adapts the questions to a friendship and sends the ending", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+
+    await user.click(await screen.findByLabelText("A friendship"));
+    expect(await screen.findByRole("group", { name: "How long have you been friends?" })).toBeInTheDocument();
+    await user.click(screen.getByLabelText("Not long"));
+    const reasons = await screen.findByRole("group", { name: "What's the main reason?" });
+    expect(within(reasons).getByLabelText("It feels one-sided")).toBeInTheDocument();
+    expect(within(reasons).queryByLabelText("The spark is gone")).not.toBeInTheDocument();
+    await user.click(within(reasons).getByLabelText("It feels one-sided"));
+    await user.click(await screen.findByLabelText("Gentle"));
+    await user.click(await screen.findByLabelText("Text message"));
+    await user.click(await screen.findByRole("button", { name: /write my messages/i }));
+
+    await waitFor(() => expect(requests("/api/generate")).toHaveLength(1));
+    expect(requests("/api/generate")[0]).toMatchObject({ ending: "friendship", duration: "few-dates", reason: "one-sided" });
+  });
+
+  it("asks what you want to say when replying to a breakup", async () => {
+    const user = userEvent.setup();
+    render(<ClosureApp />);
+
+    await user.click(await screen.findByLabelText("Replying to a breakup"));
+    await user.click(await screen.findByLabelText("1–3 years"));
+    expect(await screen.findByRole("group", { name: "What do you want to say?" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Ask for a little closure")).toBeInTheDocument();
+  });
+
+  it("clears a reason that doesn't fit when the ending changes", async () => {
+    const user = userEvent.setup();
+    render(<ClosureApp />);
+
+    await user.click(await screen.findByLabelText("A relationship"));
+    await user.click(await screen.findByLabelText("1–3 years"));
+    await user.click(await screen.findByLabelText("Distance is too hard"));
+    for (let i = 0; i < 3; i++) await user.click(screen.getByRole("button", { name: /back/i }));
+    await user.click(await screen.findByLabelText("A friendship"));
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    const reasons = await screen.findByRole("group", { name: "What's the main reason?" });
+    expect(within(reasons).getAllByRole("radio").filter((r) => (r as HTMLInputElement).checked)).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /next/i })).not.toBeInTheDocument();
   });
 });
 

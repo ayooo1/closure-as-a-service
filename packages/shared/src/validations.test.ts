@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  durationLabel,
+  EndingSchema,
   GenerationSchema,
   QuestionnaireSchema,
+  REASON_LABELS,
+  REASONS_BY_ENDING,
   RefineRequestSchema,
   RepliesRequestSchema,
   RepliesSchema,
@@ -10,13 +14,33 @@ import {
 const VALID = { duration: "6-12-months", reason: "need-space", tone: "gentle", medium: "email" };
 
 describe("QuestionnaireSchema", () => {
-  it("accepts the required answers alone", () => {
-    expect(QuestionnaireSchema.parse(VALID)).toEqual(VALID);
+  it("accepts the required answers alone, defaulting to a romantic relationship", () => {
+    expect(QuestionnaireSchema.parse(VALID)).toEqual({ ending: "relationship", ...VALID });
+  });
+
+  it("only accepts reasons that fit the kind of ending", () => {
+    expect(QuestionnaireSchema.safeParse({ ...VALID, ending: "friendship", reason: "grown-apart" }).success).toBe(true);
+    const wrong = QuestionnaireSchema.safeParse({ ...VALID, ending: "friendship", reason: "long-distance" });
+    expect(wrong.success).toBe(false);
+    expect(wrong.error!.issues[0]!.path).toEqual(["reason"]);
+    expect(QuestionnaireSchema.safeParse({ ...VALID, reason: "grown-apart" }).success).toBe(false); // not a romantic reason
+  });
+
+  it("offers every ending at least one reason plus 'Something else', each with a label", () => {
+    for (const ending of EndingSchema.options) {
+      expect(REASONS_BY_ENDING[ending]).toContain("other");
+      for (const reason of REASONS_BY_ENDING[ending]) expect(REASON_LABELS[reason]).toBeTruthy();
+    }
+  });
+
+  it("relabels 'A few dates' for friendships", () => {
+    expect(durationLabel("friendship", "few-dates")).toBe("Not long");
+    expect(durationLabel("relationship", "few-dates")).toBe("A few dates");
   });
 
   it("trims optional text and drops it when blank", () => {
     const parsed = QuestionnaireSchema.parse({ ...VALID, name: "  Sam ", details: "   " });
-    expect(parsed).toEqual({ ...VALID, name: "Sam" });
+    expect(parsed).toEqual({ ending: "relationship", ...VALID, name: "Sam" });
     expect("details" in parsed && parsed.details !== undefined).toBe(false);
   });
 
@@ -27,7 +51,7 @@ describe("QuestionnaireSchema", () => {
   });
 
   it("strips unknown fields", () => {
-    expect(QuestionnaireSchema.parse({ ...VALID, admin: true })).toEqual(VALID);
+    expect(QuestionnaireSchema.parse({ ...VALID, admin: true })).toEqual({ ending: "relationship", ...VALID });
   });
 
   it.each([
@@ -69,7 +93,7 @@ describe("follow-up requests", () => {
 
   it("refine: validates the nested questionnaire, trims the message and checks the refinement", () => {
     const parsed = RefineRequestSchema.parse({ questionnaire: VALID, message: `  ${message} `, refinement: "softer" });
-    expect(parsed).toEqual({ questionnaire: VALID, message, refinement: "softer" });
+    expect(parsed).toEqual({ questionnaire: { ending: "relationship", ...VALID }, message, refinement: "softer" });
     expect(RefineRequestSchema.safeParse({ questionnaire: VALID, message, refinement: "meaner" }).success).toBe(false);
   });
 
