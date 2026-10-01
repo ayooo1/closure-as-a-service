@@ -3,7 +3,8 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GenerationCache } from "../lib/cache.js";
 import type { TextGenerator } from "../lib/generator.js";
-import { SYSTEM_PROMPT } from "../lib/prompt.js";
+import { GenerationSchema, RefinedSchema, RepliesSchema } from "@caas/shared";
+import { REFINE_SYSTEM_PROMPT, REPLIES_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../lib/prompt.js";
 import { failingGenerator, SAMPLE_GENERATION, streamingGenerator } from "../testing/fake-generator.js";
 import { generateRoutes, type GenerateDeps } from "./generate.js";
 
@@ -59,6 +60,7 @@ describe("POST /api/generate", () => {
 
     const call = generate.calls[0]!;
     expect(call.system).toBe(SYSTEM_PROMPT);
+    expect(call.schema).toBe(GenerationSchema);
     expect(call.prompt).toContain("Address them as Sam");
     expect(call.prompt).toContain("We met at uni");
     expect(call.signal).toBeInstanceOf(AbortSignal);
@@ -99,6 +101,22 @@ describe("POST /api/generate", () => {
     expect(res.headers["x-cache"]).toBe("hit");
     expect(JSON.parse(res.body)).toEqual(SAMPLE_GENERATION);
     expect(generate.calls).toHaveLength(1);
+  });
+
+  it("never caches answers that include a name or personal details", async () => {
+    const cache = memoryCache();
+    const generate = streamingGenerator(SAMPLE_JSON);
+    app = await build({ cache, generate });
+
+    for (const personal of [{ name: "Sam" }, { details: "We met at uni" }]) {
+      const first = await post(app, { ...VALID, ...personal });
+      const second = await post(app, { ...VALID, ...personal });
+      expect(first.statusCode).toBe(200);
+      expect([first.headers["x-cache"], second.headers["x-cache"]]).toEqual(["skip", "skip"]);
+    }
+    expect(generate.calls).toHaveLength(4);
+    expect(cache.get).not.toHaveBeenCalled();
+    expect(cache.set).not.toHaveBeenCalled();
   });
 
   it("keeps separate cache entries per model", async () => {
@@ -183,5 +201,80 @@ describe("POST /api/generate", () => {
     app = await build();
     const res = await post(app, { ...VALID, padding: "x".repeat(5000) });
     expect(res.statusCode).toBe(413);
+  });
+});
+
+const REFINED_JSON = JSON.stringify({ message: "Sam, I'm ending our relationship." });
+const REPLIES_JSON = JSON.stringify({
+  replies: [
+    { theySay: "Can we talk about this?", youCanSay: "I've thought about it carefully, and my decision is final." },
+    { theySay: "Why?", youCanSay: "We want different things. I'm sorry." },
+  ],
+});
+const QUESTIONNAIRE = { ...VALID, name: "Sam" };
+const MESSAGE = "Sam, I've realised we want different things, so I'm ending our relationship.";
+
+describe("follow-ups", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+
+  const send = (url: string, payload: unknown) =>
+    app!.inject({ method: "POST", url, payload: payload as object });
+
+  it("POST /api/refine streams a rewritten message, never cached", async () => {
+    const cache = memoryCache();
+    const generate = streamingGenerator(REFINED_JSON);
+    app = await build({ cache, generate });
+
+    const res = await send("/api/refine", { questionnaire: QUESTIONNAIRE, message: MESSAGE, refinement: "without-reason" });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(JSON.parse(res.body)).toEqual(JSON.parse(REFINED_JSON));
+
+    const call = generate.calls[0]!;
+    expect(call.system).toBe(REFINE_SYSTEM_PROMPT);
+    expect(call.schema).toBe(RefinedSchema);
+    expect(call.prompt).toContain(MESSAGE);
+    expect(call.prompt).toContain("Remove the reason");
+    expect(cache.get).not.toHaveBeenCalled();
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/replies streams likely replies with suggested responses, never cached", async () => {
+    const cache = memoryCache();
+    const generate = streamingGenerator(REPLIES_JSON);
+    app = await build({ cache, generate });
+
+    const res = await send("/api/replies", { questionnaire: QUESTIONNAIRE, message: MESSAGE });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(JSON.parse(REPLIES_JSON));
+
+    const call = generate.calls[0]!;
+    expect(call.system).toBe(REPLIES_SYSTEM_PROMPT);
+    expect(call.schema).toBe(RepliesSchema);
+    expect(call.prompt).toContain(MESSAGE);
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["/api/refine", { questionnaire: QUESTIONNAIRE, message: MESSAGE, refinement: "meaner" }, "refinement"],
+    ["/api/refine", { questionnaire: QUESTIONNAIRE, message: "   ", refinement: "shorter" }, "message"],
+    ["/api/replies", { questionnaire: QUESTIONNAIRE, message: "x".repeat(2001) }, "message"],
+    ["/api/replies", { questionnaire: { ...QUESTIONNAIRE, tone: "savage" }, message: MESSAGE }, "questionnaire.tone"],
+    ["/api/replies", { message: MESSAGE }, "questionnaire"],
+  ])("%s rejects invalid input with 400 naming %s", async (url, payload, field) => {
+    const generate = streamingGenerator(REFINED_JSON);
+    app = await build({ generate });
+
+    const res = await send(url, payload);
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ issues: { path: string }[] }>().issues.map((i) => i.path)).toContain(field);
+    expect(generate.calls).toHaveLength(0);
+  });
+
+  it.each(["/api/refine", "/api/replies"])("%s returns 502 when the API call fails", async (url) => {
+    app = await build({ generate: failingGenerator() });
+    const res = await send(url, { questionnaire: QUESTIONNAIRE, message: MESSAGE, refinement: "shorter" });
+    expect(res.statusCode).toBe(502);
   });
 });

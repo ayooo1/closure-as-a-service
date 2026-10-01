@@ -139,6 +139,9 @@ export function Wizard({
                   {details.length} / {DETAILS_MAX_LENGTH}
                 </p>
               </div>
+              <p className="text-xs text-muted-foreground">
+                We don&apos;t save your name or details. They&apos;re only sent to Claude to write your messages.
+              </p>
               <Button type="submit" className="w-full">
                 <Sparkles /> Write my messages
               </Button>

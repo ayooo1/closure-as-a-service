@@ -82,6 +82,10 @@ export const VARIATION_COUNT = 3;
 // No array length constraint: provider structured-output modes vary in support for it, so
 // the count is enforced via the prompt and the UI renders at most VARIATION_COUNT.
 export const GenerationSchema = z.object({
+  // First, so the UI can show safety guidance before the messages finish streaming.
+  safetyConcern: z
+    .boolean()
+    .describe("True only if the details suggest the user may be at risk of harm from this person"),
   variations: z
     .array(
       z.object({
@@ -92,3 +96,51 @@ export const GenerationSchema = z.object({
     .describe(`Exactly ${VARIATION_COUNT} distinct variations`),
 });
 export type Generation = z.infer<typeof GenerationSchema>;
+
+// ---- Follow-ups on one chosen message ----
+
+export const MESSAGE_MAX_LENGTH = 2000;
+const MessageText = z.string().trim().min(1).max(MESSAGE_MAX_LENGTH);
+
+export const RefinementSchema = z.enum(["shorter", "softer", "more-direct", "warmer", "without-reason"]);
+export type Refinement = z.infer<typeof RefinementSchema>;
+export const REFINEMENT_LABELS: Record<Refinement, string> = {
+  shorter: "Shorter",
+  softer: "Softer",
+  "more-direct": "More direct",
+  warmer: "Warmer",
+  "without-reason": "Without the reason",
+};
+
+/** POST /api/refine: rewrite one message. */
+export const RefineRequestSchema = z.object({
+  questionnaire: QuestionnaireSchema,
+  message: MessageText,
+  refinement: RefinementSchema,
+});
+export type RefineRequest = z.input<typeof RefineRequestSchema>;
+
+export const RefinedSchema = z.object({
+  message: z.string().describe("The rewritten message, ready to send or say"),
+});
+export type Refined = z.infer<typeof RefinedSchema>;
+
+/** POST /api/replies: likely responses to a sent message, and how to answer each. */
+export const RepliesRequestSchema = z.object({
+  questionnaire: QuestionnaireSchema,
+  message: MessageText,
+});
+export type RepliesRequest = z.input<typeof RepliesRequestSchema>;
+
+export const REPLY_COUNT = 4;
+export const RepliesSchema = z.object({
+  replies: z
+    .array(
+      z.object({
+        theySay: z.string().describe("A realistic reply they might send, in their voice"),
+        youCanSay: z.string().describe("A calm, kind response that holds the decision"),
+      }),
+    )
+    .describe(`Exactly ${REPLY_COUNT} different likely replies`),
+});
+export type Replies = z.infer<typeof RepliesSchema>;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GenerationSchema, RepliesSchema } from "@caas/shared";
 import { createClaudeGenerator } from "./generator.js";
 
 // A stand-in for client.beta.messages.stream: replays SSE events, then resolves the final message.
@@ -13,7 +14,7 @@ function fakeClient(events: object[], stopReason = "end_turn") {
 }
 
 const textDelta = (text: string) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } });
-const req = { system: "sys", prompt: "prompt", signal: new AbortController().signal };
+const req = { system: "sys", prompt: "prompt", schema: GenerationSchema, signal: new AbortController().signal };
 
 async function drain(gen: AsyncGenerator<string, string | null>) {
   const chunks: string[] = [];
@@ -70,11 +71,18 @@ describe("createClaudeGenerator", () => {
     expect(withEffort!.output_config).toMatchObject({ effort: "low" });
   });
 
-  it("constrains output to the generation schema", async () => {
+  it("constrains output to each request's schema, converting each schema once", async () => {
     const { client, stream } = fakeClient([]);
-    await drain(createClaudeGenerator(client, "claude-haiku-4-5")(req));
+    const generate = createClaudeGenerator(client, "claude-haiku-4-5");
+    await drain(generate(req));
+    await drain(generate({ ...req, schema: RepliesSchema }));
+    await drain(generate(req));
 
-    const params = (stream.mock.calls[0] as unknown as [{ output_config: { format: { schema: unknown } } }])[0];
-    expect(JSON.stringify(params.output_config.format.schema)).toContain('"variations"');
+    const formats = stream.mock.calls.map(
+      (c) => (c as unknown as [{ output_config: { format: { schema: unknown } } }])[0].output_config.format,
+    );
+    expect(JSON.stringify(formats[0]!.schema)).toContain('"safetyConcern"');
+    expect(JSON.stringify(formats[1]!.schema)).toContain('"youCanSay"');
+    expect(formats[2]).toBe(formats[0]); // reused, not rebuilt
   });
 });

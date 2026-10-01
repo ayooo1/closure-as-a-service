@@ -12,9 +12,13 @@ This project is also a **full-stack and cloud-native showcase**: a Next.js front
 
 - **Multi-step wizard**: relationship duration → reason → tone → medium → optional details, validated end to end with Zod
 - **Real-time AI streaming**: three variations streamed token by token from Claude (Haiku 4.5 by default, Opus 5.5 configurable)
-- **Actionable result cards**: one-click copy, `sms:` deep links, and quick tone-tweak regeneration
+- **Actionable result cards**: one-click copy, `sms:`/`mailto:` deep links, and quick tone-tweak regeneration
+- **Refine one message**: edit it by hand or have Claude rewrite it (shorter, softer, more direct, warmer, without the reason), with undo
+- **"What if they reply?"**: likely responses to the chosen message, each with a calm answer that holds the decision
+- **Safety check**: if the details suggest the user may be at risk, messages become short and final, and the page shows safety guidance and helplines
+- **Privacy by default**: answers that include a name or personal details are never cached or stored
 - **Redis-backed rate limiting**: per-IP limits shared across every API replica
-- **Prompt result caching**: identical questionnaire inputs are served from Redis
+- **Prompt result caching**: identical answers without personal text are served from Redis
 - **Production Kubernetes setup**: Deployments, Services, ConfigMap/Secret, Ingress and HPA
 
 ## 🏗️ Architecture
@@ -129,14 +133,22 @@ See [`k8s/README.md`](k8s/README.md) for Minikube / k3d / Kind specifics.
 ```
 
 Valid values for each field live in [`packages/shared/src/validations.ts`](packages/shared/src/validations.ts).
-The response is `text/plain`: the JSON object `{ "variations": [{ "angle", "message" }, …] }`, streamed
-token by token on a cache miss (`x-cache: miss`) or sent whole on a hit (`x-cache: hit`).
+The response is `text/plain`: the JSON object `{ "safetyConcern": false, "variations": [{ "angle", "message" }, …] }`,
+streamed token by token. `x-cache` is `hit` (sent whole from Redis), `miss`, or `skip` (the answers include a name or
+details, so they're never cached).
+
+Follow-ups on one chosen message (rate limited the same way, never cached):
+
+| Endpoint | Body | Streams |
+| --- | --- | --- |
+| `POST /api/refine` | `{ questionnaire, message, refinement }` where `refinement` is `shorter`, `softer`, `more-direct`, `warmer` or `without-reason` | `{ "message" }` |
+| `POST /api/replies` | `{ questionnaire, message }` | `{ "replies": [{ "theySay", "youCanSay" }, …] }` |
 
 | Status | Meaning |
 | --- | --- |
 | 200 | Generation (streamed or cached) |
 | 400 | Invalid questionnaire; `issues` lists the offending fields |
-| 413 | Body over 4 KB |
+| 413 | Body too large (4 KB for `/generate`, 8 KB for follow-ups) |
 | 429 | Rate limit exceeded |
 | 502 | The model provider failed before producing output |
 

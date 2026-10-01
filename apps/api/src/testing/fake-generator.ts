@@ -28,6 +28,7 @@ export function failingGenerator(message = "401 invalid x-api-key") {
 }
 
 export const SAMPLE_GENERATION = {
+  safetyConcern: false,
   variations: [
     { angle: "Short and kind", message: "I've realised I don't see a future for us, and I'm ending things." },
     { angle: "With a reason", message: "I need to focus on myself right now, so I'm ending our relationship." },
