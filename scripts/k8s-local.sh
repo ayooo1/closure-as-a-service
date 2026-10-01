@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Local Kubernetes workflow on k3d.  Usage: scripts/k8s-local.sh {up|deploy|status|down}
+set -euo pipefail
+
+CLUSTER=caas
+NS=caas
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+need() { command -v "$1" >/dev/null || { echo "✗ '$1' not found. Install it first (see README)." >&2; exit 1; }; }
+
+create_cluster() {
+  if k3d cluster list -o json | grep -q "\"name\":\"$CLUSTER\""; then
+    echo "• Cluster '$CLUSTER' already exists"
+  else
+    echo "• Creating k3d cluster '$CLUSTER'"
+    k3d cluster create --config k8s/k3d-cluster.yaml --wait
+  fi
+  kubectl config use-context "k3d-$CLUSTER" >/dev/null
+}
+
+build_images() {
+  [[ -f package-lock.json ]] || { echo "• Generating package-lock.json"; npm install --package-lock-only --no-audit --no-fund; }
+  echo "• Building images"
+  docker build -t caas-api:local -f apps/api/Dockerfile .
+  docker build -t caas-web:local -f apps/web/Dockerfile .
+  echo "• Importing images into the cluster"
+  k3d image import caas-api:local caas-web:local -c "$CLUSTER"
+}
+
+apply_secret() {
+  local key
+  key="$(grep -E '^OPENAI_API_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'" || true)"
+  if [[ -z "$key" || "$key" == "sk-..." ]]; then
+    echo "✗ Set OPENAI_API_KEY in .env (cp .env.example .env)" >&2
+    exit 1
+  fi
+  kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS" >/dev/null
+  kubectl -n "$NS" create secret generic caas-secrets \
+    --from-literal=OPENAI_API_KEY="$key" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  echo "• Secret caas-secrets applied"
+}
+
+deploy() {
+  apply_secret
+  echo "• Applying manifests"
+  kubectl apply -k k8s/
+  # Pick up freshly imported images even though the tag (:local) didn't change.
+  kubectl -n "$NS" rollout restart deployment/api deployment/web >/dev/null
+  for d in redis api web; do
+    kubectl -n "$NS" rollout status "deployment/$d" --timeout=180s
+  done
+  echo
+  echo "✓ Ready: http://localhost:8080"
+}
+
+case "${1:-up}" in
+  up)     need docker; need k3d; need kubectl; need npm; create_cluster; build_images; deploy ;;
+  deploy) need docker; need k3d; need kubectl; build_images; deploy ;;
+  status) kubectl -n "$NS" get pods,svc,ingress,hpa -o wide ;;
+  down)   k3d cluster delete "$CLUSTER" ;;
+  *)      echo "Usage: $0 {up|deploy|status|down}" >&2; exit 1 ;;
+esac

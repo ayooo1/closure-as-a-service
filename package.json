@@ -1,0 +1,24 @@
+{
+  "name": "closure-as-a-service",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI-powered breakup message generator — Next.js + Fastify + Redis on Kubernetes",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace=@caas/api & npm run dev --workspace=@caas/web",
+    "dev:web": "npm run dev --workspace=@caas/web",
+    "dev:api": "npm run dev --workspace=@caas/api",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

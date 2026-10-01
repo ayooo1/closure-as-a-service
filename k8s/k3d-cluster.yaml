@@ -1,0 +1,11 @@
+# Local cluster: k3d cluster create --config k8s/k3d-cluster.yaml
+# Ships Traefik (Ingress) and metrics-server (HPA) out of the box.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: caas
+servers: 1
+agents: 1
+ports:
+  - port: 8080:80
+    nodeFilters: [loadbalancer]
