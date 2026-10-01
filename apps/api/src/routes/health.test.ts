@@ -5,7 +5,7 @@ import { healthRoutes } from "./health.js";
 
 async function build(redis: RedisClient) {
   const app = Fastify();
-  await app.register(healthRoutes, { redis });
+  await app.register(healthRoutes, { redis, version: "1.2.0" });
   return app;
 }
 
@@ -18,7 +18,7 @@ describe("health routes", () => {
     app = await build({ ping });
     const res = await app.inject("/healthz");
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: "ok" });
+    expect(res.json()).toEqual({ status: "ok", version: "1.2.0" });
     expect(ping).not.toHaveBeenCalled();
   });
 

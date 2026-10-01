@@ -42,3 +42,4 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 await app.listen({ port: env.PORT, host: env.HOST });
+app.log.info({ version: env.APP_VERSION, model: env.AI_MODEL }, "caas api started");

@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+    # A version tag (cut with scripts/release.sh) runs the same checks, then publishes a release.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   pull_request:
 
 permissions:
@@ -43,8 +45,8 @@ jobs:
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
           kubectl kustomize k8s | ./kubeconform -strict -summary -kubernetes-version 1.33.0 -
 
-  # PRs: build only. Pushes to main: build and publish to GitHub Container Registry,
-  # only after lint, typecheck, tests and manifest validation have passed.
+  # PRs: build only. Pushes to main and version tags: build and publish to GitHub Container
+  # Registry, only after lint, typecheck, tests and manifest validation have passed.
   images:
     needs: [test, manifests]
     runs-on: ubuntu-latest
@@ -55,7 +57,7 @@ jobs:
       matrix:
         app: [api, web]
     env:
-      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      PUBLISH: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -69,10 +71,14 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/caas-${{ matrix.app }}
-          # sha-<7 chars> is immutable (deploy and roll back by it); latest tracks main.
+          # sha-<7 chars> is immutable (deploy and roll back by it); latest tracks main;
+          # a v1.2.3 tag also publishes 1.2.3 and 1.2 (the newest patch of that minor version;
+          # pre-releases like v1.3.0-rc.1 get only their full version).
           tags: |
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
       - uses: docker/build-push-action@v7
         with:
           context: .
@@ -80,5 +86,42 @@ jobs:
           push: ${{ env.PUBLISH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: APP_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  # Version tags only: a GitHub Release with notes from the merged PRs, plus one manifest file that
+  # deploys exactly this version (kubectl apply -f caas-vX.Y.Z.yaml).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render the manifests pinned to this version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          registry="ghcr.io/$(tr "[:upper:]" "[:lower:]" <<< "$GITHUB_REPOSITORY_OWNER")"
+          cat >> k8s/kustomization.yaml <<EOF
+          images:
+            - name: caas-api
+              newName: $registry/caas-api
+              newTag: ${TAG#v}
+            - name: caas-web
+              newName: $registry/caas-web
+              newTag: ${TAG#v}
+          EOF
+          kubectl kustomize k8s > "caas-$TAG.yaml"
+          grep -q "image: $registry/caas-api:${TAG#v}" "caas-$TAG.yaml"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        # A tag like v1.3.0-rc.1 becomes a pre-release.
+        run: |
+          flags=(--verify-tag --generate-notes --title "$TAG")
+          if [[ $TAG == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" "caas-$TAG.yaml" "${flags[@]}"

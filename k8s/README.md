@@ -39,6 +39,19 @@ the controller sees the real client address:
   `LoadBalancer` Service, or enable PROXY protocol on both the cloud load balancer and the controller. Otherwise
   all traffic is limited as if it came from a handful of node IPs.
 
+## Deploy a release
+
+Each [GitHub Release](https://github.com/ayooo1/closure-as-a-service/releases) has a `caas-vX.Y.Z.yaml` asset: these
+manifests with the images pinned to that version. Create the namespace and Secret once, then apply it:
+
+```bash
+kubectl create namespace caas
+kubectl -n caas create secret generic caas-secrets --from-literal=ANTHROPIC_API_KEY=<your key>
+kubectl apply -f https://github.com/ayooo1/closure-as-a-service/releases/download/v0.1.0/caas-v0.1.0.yaml
+```
+
+Upgrading or rolling back is applying another release's file. The images must be pullable (see below).
+
 ## Deploy the published images
 
 CI pushes `ghcr.io/ayooo1/caas-api` and `ghcr.io/ayooo1/caas-web` on every merge to `main`. To deploy a

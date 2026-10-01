@@ -129,6 +129,21 @@ On an existing cluster, use the images CI publishes; see [`k8s/README.md`](k8s/R
 Kubernetes manifest validation and Docker image builds. When all of that passes on `main`, both images are pushed to
 GitHub Container Registry as `ghcr.io/ayooo1/caas-{api,web}`, tagged `sha-<commit>` and `latest`.
 
+### Releases
+
+Cut a release from an up-to-date `main`:
+
+```bash
+npm run release              # next patch version, e.g. v0.1.0 -> v0.1.1
+npm run release -- minor     # or major, or an explicit version like v0.2.0-rc.1 (a pre-release)
+```
+
+The script shows what changed since the last release, asks to confirm, then tags `main` and pushes the tag. CI runs
+every check on the tag, publishes the images tagged with the version (`0.2.0`, and `0.2` for the newest patch), and
+creates a [GitHub Release](https://github.com/ayooo1/closure-as-a-service/releases) with notes from the merged pull
+requests and `caas-v0.2.0.yaml`, a single manifest that deploys exactly that version
+(see [`k8s/README.md`](k8s/README.md#deploy-a-release)). The API reports its version at `GET /healthz`.
+
 See [`k8s/README.md`](k8s/README.md) for Minikube / k3d / Kind specifics.
 
 ## 🔌 API
@@ -182,7 +197,7 @@ Set it in [`k8s/configmap.yaml`](k8s/configmap.yaml) (or `.env` locally). The re
 
 | Service | Endpoint | Purpose |
 | --- | --- | --- |
-| api | `GET /healthz` | Liveness: the process is responsive |
+| api | `GET /healthz` | Liveness: the process is responsive; also reports the release `version` |
 | api | `GET /readyz` | Readiness: Redis is reachable |
 | web | `GET /healthz` | Liveness and readiness |
 

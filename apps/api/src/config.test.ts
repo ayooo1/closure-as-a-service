@@ -14,6 +14,7 @@ describe("loadEnv", () => {
       RATE_LIMIT_MAX: 10,
       RATE_LIMIT_WINDOW: "1 minute",
       CACHE_TTL_SECONDS: 3600,
+      APP_VERSION: "dev",
     });
   });
 

@@ -38,7 +38,7 @@ export async function buildServer({ env, redis, generate, logger }: ServerDeps) 
     skipOnError: true,
   });
 
-  await app.register(healthRoutes, { redis });
+  await app.register(healthRoutes, { redis, version: env.APP_VERSION });
 
   const cache = createCache(redis, env.CACHE_TTL_SECONDS, (err) =>
     app.log.warn({ err }, "Generation cache unavailable"),
