@@ -10,13 +10,19 @@ This project is also a **full-stack and cloud-native showcase**: a Next.js front
 
 ## ✨ Features
 
-- **Multi-step wizard**: relationship duration → reason → tone → medium → optional details, validated end to end with Zod
+- **Many kinds of endings**: a relationship, a situationship, a friendship, apologising for ghosting someone, or replying to a breakup, each with its own questions and goals
+- **Multi-step wizard**: ending → duration → reason → tone → medium → optional details, validated end to end with Zod
 - **Real-time AI streaming**: three variations streamed token by token from Claude (Haiku 4.5 by default, Opus 5.5 configurable)
 - **Actionable result cards**: one-click copy, `sms:`/`mailto:` deep links, and quick tone-tweak regeneration
 - **Refine one message**: edit it by hand or have Claude rewrite it (shorter, softer, more direct, warmer, without the reason), with undo
 - **"What if they reply?"**: likely responses to the chosen message, each with a calm answer that holds the decision
+- **Practice conversation**: rehearse with Claude playing the other person, with a coaching tip after each reply (up to 8 replies)
+- **Read aloud**: hear a message spoken (browser speech, on-device) to rehearse an in-person conversation
+- **Logistics message**: a practical follow-up about belongings, money, a shared home, pets or accounts
+- **After you send it**: a short aftercare checklist, tailored to the kind of ending
+- **👍/👎 feedback**: votes stored by answer category only (never text), summarised with `scripts/feedback-report.sh`
 - **Safety check**: if the details suggest the user may be at risk, messages become short and final, and the page shows safety guidance and helplines
-- **Privacy by default**: answers that include a name or personal details are never cached or stored
+- **Privacy by default**: answers that include a name or personal details are never cached or stored; practice conversations aren't stored
 - **Redis-backed rate limiting**: per-IP limits shared across every API replica
 - **Prompt result caching**: identical answers without personal text are served from Redis
 - **Production Kubernetes setup**: Deployments, Services, ConfigMap/Secret, Ingress and HPA
@@ -137,18 +143,25 @@ The response is `text/plain`: the JSON object `{ "safetyConcern": false, "variat
 streamed token by token. `x-cache` is `hit` (sent whole from Redis), `miss`, or `skip` (the answers include a name or
 details, so they're never cached).
 
+`ending` is optional and defaults to `relationship`; each ending accepts its own set of reasons.
+
 Follow-ups on one chosen message (rate limited the same way, never cached):
 
 | Endpoint | Body | Streams |
 | --- | --- | --- |
 | `POST /api/refine` | `{ questionnaire, message, refinement }` where `refinement` is `shorter`, `softer`, `more-direct`, `warmer` or `without-reason` | `{ "message" }` |
 | `POST /api/replies` | `{ questionnaire, message }` | `{ "replies": [{ "theySay", "youCanSay" }, …] }` |
+| `POST /api/practice` | `{ questionnaire, message, turns: [{ role: "them" \| "you", text }] }`, alternating and ending on `you` (empty to start), at most 8 replies | `{ "theySay", "coachTip", "conversationOver" }` |
+| `POST /api/logistics` | `{ questionnaire, topics: ["belongings" \| "money" \| "home" \| "pets" \| "accounts"], notes?, safetyConcern? }` | `{ "message" }` |
+
+`POST /api/feedback` takes `{ vote: "up" | "down", ending, duration, reason, tone, medium, changed, safetyConcern }`
+and returns 204. It records counts per day in Redis and never any text; see `scripts/feedback-report.sh`.
 
 | Status | Meaning |
 | --- | --- |
 | 200 | Generation (streamed or cached) |
 | 400 | Invalid questionnaire; `issues` lists the offending fields |
-| 413 | Body too large (4 KB for `/generate`, 8 KB for follow-ups) |
+| 413 | Body too large (4 KB for `/generate`, 40 KB for `/practice`, 8 KB for other follow-ups) |
 | 429 | Rate limit exceeded |
 | 502 | The model provider failed before producing output |
 
