@@ -1,7 +1,10 @@
 "use client";
 
 import { RotateCcw, Square } from "lucide-react";
-import { TONE_LABELS, VARIATION_COUNT, type Questionnaire, type Tone } from "@caas/shared";
+import { LOGISTICS_ENDINGS, TONE_LABELS, VARIATION_COUNT, type Questionnaire, type Tone } from "@caas/shared";
+import { useState } from "react";
+import { AfterSending } from "@/components/after-sending";
+import { LogisticsPanel } from "@/components/logistics-panel";
 import { ResultCard } from "@/components/result-card";
 import { SafetyNotice } from "@/components/safety-notice";
 import { Button } from "@/components/ui/button";
@@ -23,6 +26,9 @@ export function Results({
   onCancel: () => void;
   onStartOver: () => void;
 }) {
+  // "shared" once anything is copied or opened to send; "dismissed" stays closed for this result.
+  const [aftercare, setAftercare] = useState<"hidden" | "shown" | "dismissed">("hidden");
+  const onShare = () => setAftercare((a) => (a === "hidden" ? "shown" : a));
   const streaming = state.status === "streaming";
   const done = state.status === "done";
   const shown = state.data.variations.slice(0, VARIATION_COUNT);
@@ -76,9 +82,22 @@ export function Results({
             medium={medium}
             questionnaire={questionnaire}
             safetyConcern={safetyConcern}
+            onShare={onShare}
           />
         ))}
       </div>
+
+      {aftercare === "shown" && (
+        <AfterSending
+          ending={questionnaire.ending}
+          safetyConcern={safetyConcern}
+          onDismiss={() => setAftercare("dismissed")}
+        />
+      )}
+
+      {done && shown.length > 0 && LOGISTICS_ENDINGS.includes(questionnaire.ending) && (
+        <LogisticsPanel questionnaire={questionnaire} safetyConcern={safetyConcern} onShare={onShare} />
+      )}
 
       {done && shown.length > 0 && (
         <div className="space-y-2 pt-2">

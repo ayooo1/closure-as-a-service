@@ -1,6 +1,11 @@
 import { Allow, parse } from "partial-json";
 import type {
+  Feedback,
   Generation,
+  Logistics,
+  LogisticsRequest,
+  PracticeReply,
+  PracticeRequest,
   QuestionnaireInput,
   RefineRequest,
   Refined,
@@ -127,6 +132,23 @@ export function streamReplies(input: RepliesRequest, opts?: StreamOptions): Asyn
   return streamJson("/api/replies", input, (p) => objectsIn(p?.replies) as PartialReply[], opts);
 }
 
+export function streamLogistics(input: LogisticsRequest, opts?: StreamOptions): AsyncGenerator<Partial<Logistics>> {
+  return streamJson("/api/logistics", input, (p) => (typeof p?.message === "string" ? { message: p.message } : {}), opts);
+}
+
+export function streamPractice(input: PracticeRequest, opts?: StreamOptions): AsyncGenerator<Partial<PracticeReply>> {
+  return streamJson(
+    "/api/practice",
+    input,
+    (p) => ({
+      ...(typeof p?.theySay === "string" ? { theySay: p.theySay } : {}),
+      ...(typeof p?.coachTip === "string" ? { coachTip: p.coachTip } : {}),
+      ...(typeof p?.conversationOver === "boolean" ? { conversationOver: p.conversationOver } : {}),
+    }),
+    opts,
+  );
+}
+
 /** iOS and Android both accept `sms:?&body=`; there's no recipient, the user picks one. */
 export function smsHref(message: string): string {
   return `sms:?&body=${encodeURIComponent(message)}`;
@@ -134,4 +156,19 @@ export function smsHref(message: string): string {
 
 export function mailtoHref(message: string): string {
   return `mailto:?body=${encodeURIComponent(message)}`;
+}
+
+/** Fire-and-forget 👍/👎. Returns whether it was recorded; failures are never shown to the user. */
+export async function sendFeedback(feedback: Feedback, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const res = await fetchImpl("/api/feedback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(feedback),
+      keepalive: true, // still delivered if the user navigates away right after voting
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

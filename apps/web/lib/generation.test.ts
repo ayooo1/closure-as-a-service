@@ -1,6 +1,16 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { GenerationError, mailtoHref, smsHref, streamGeneration, streamRefine, streamReplies } from "./generation";
+import {
+  GenerationError,
+  mailtoHref,
+  sendFeedback,
+  smsHref,
+  streamGeneration,
+  streamLogistics,
+  streamPractice,
+  streamRefine,
+  streamReplies,
+} from "./generation";
 
 const INPUT = { duration: "1-3-years", reason: "different-goals", tone: "warm", medium: "text" } as const;
 const FULL = JSON.stringify({
@@ -143,6 +153,23 @@ describe("follow-up streams", () => {
     expect(yields.at(-1)).toEqual([{ theySay: "Why?", youCanSay: "We want different things." }]);
   });
 
+  it("streamLogistics POSTs to /api/logistics and yields the growing message", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(streamingResponse(['{"message":"When', ' suits you?"}']));
+    const yields = await collect(streamLogistics({ questionnaire: INPUT, topics: ["belongings"] }, { fetchImpl }));
+    expect(fetchImpl).toHaveBeenCalledWith("/api/logistics", expect.objectContaining({ method: "POST" }));
+    expect(yields).toEqual([{ message: "When" }, { message: "When suits you?" }]);
+  });
+
+  it("streamPractice yields their reply first, then the tip and whether it's over", async () => {
+    const text = JSON.stringify({ theySay: "Why?", coachTip: "Stay brief.", conversationOver: false });
+    const fetchImpl = vi.fn().mockResolvedValue(streamingResponse([text.slice(0, 18), text.slice(18)]));
+    const yields = await collect(streamPractice({ ...followUp, turns: [] }, { fetchImpl }));
+
+    expect(fetchImpl).toHaveBeenCalledWith("/api/practice", expect.objectContaining({ method: "POST" }));
+    expect(yields[0]).toEqual({ theySay: "Why?" });
+    expect(yields.at(-1)).toEqual({ theySay: "Why?", coachTip: "Stay brief.", conversationOver: false });
+  });
+
   it("follow-ups map errors the same way", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("{}", { status: 429, headers: { "retry-after": "5" } }));
     await expect(collect(streamReplies(followUp, { fetchImpl }))).rejects.toMatchObject({ kind: "rate_limited", retryAfter: 5 });
@@ -156,5 +183,29 @@ describe("share links", () => {
 
   it("builds a mailto: link with the message encoded, keeping line breaks", () => {
     expect(mailtoHref("Hi,\n\nBye")).toBe("mailto:?body=Hi%2C%0A%0ABye");
+  });
+});
+
+describe("sendFeedback", () => {
+  const vote = {
+    vote: "up",
+    ending: "friendship",
+    duration: "1-3-years",
+    reason: "grown-apart",
+    tone: "warm",
+    medium: "text",
+    changed: false,
+    safetyConcern: false,
+  } as const;
+
+  it("POSTs with keepalive so it survives navigating away", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    expect(await sendFeedback(vote, fetchImpl)).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/feedback", expect.objectContaining({ method: "POST", keepalive: true }));
+  });
+
+  it("reports failure instead of throwing", async () => {
+    expect(await sendFeedback(vote, vi.fn().mockResolvedValue(new Response("{}", { status: 503 })))).toBe(false);
+    expect(await sendFeedback(vote, vi.fn().mockRejectedValue(new TypeError("offline")))).toBe(false);
   });
 });

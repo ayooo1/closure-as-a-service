@@ -3,8 +3,21 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GenerationCache } from "../lib/cache.js";
 import type { TextGenerator } from "../lib/generator.js";
-import { GenerationSchema, RefinedSchema, RepliesSchema } from "@caas/shared";
-import { REFINE_SYSTEM_PROMPT, REPLIES_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../lib/prompt.js";
+import {
+  GenerationSchema,
+  LogisticsSchema,
+  PracticeReplySchema,
+  RefinedSchema,
+  RepliesSchema,
+  type Feedback,
+} from "@caas/shared";
+import {
+  LOGISTICS_SYSTEM_PROMPT,
+  PRACTICE_SYSTEM_PROMPT,
+  REFINE_SYSTEM_PROMPT,
+  REPLIES_SYSTEM_PROMPT,
+  SYSTEM_PROMPT,
+} from "../lib/prompt.js";
 import { failingGenerator, SAMPLE_GENERATION, streamingGenerator } from "../testing/fake-generator.js";
 import { generateRoutes, type GenerateDeps } from "./generate.js";
 
@@ -20,6 +33,11 @@ function memoryCache(initial: Record<string, string> = {}) {
   } satisfies GenerationCache & { store: Map<string, string> };
 }
 
+function memoryFeedback() {
+  const recorded: { feedback: Feedback; modelId: string }[] = [];
+  return { recorded, record: vi.fn(async (feedback: Feedback, modelId: string) => void recorded.push({ feedback, modelId })) };
+}
+
 async function build(deps: Partial<GenerateDeps> = {}) {
   const app = Fastify();
   await app.register(generateRoutes, {
@@ -27,6 +45,7 @@ async function build(deps: Partial<GenerateDeps> = {}) {
     generate: deps.generate ?? streamingGenerator(SAMPLE_JSON),
     modelId: deps.modelId ?? "claude-haiku-4-5:default",
     cache: deps.cache ?? memoryCache(),
+    feedback: deps.feedback ?? memoryFeedback(),
   });
   return app;
 }
@@ -276,5 +295,157 @@ describe("follow-ups", () => {
     app = await build({ generate: failingGenerator() });
     const res = await send(url, { questionnaire: QUESTIONNAIRE, message: MESSAGE, refinement: "shorter" });
     expect(res.statusCode).toBe(502);
+  });
+});
+
+describe("POST /api/feedback", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+
+  const VOTE = {
+    vote: "up",
+    ending: "relationship",
+    duration: "1-3-years",
+    reason: "different-goals",
+    tone: "warm",
+    medium: "text",
+    changed: false,
+    safetyConcern: false,
+  };
+
+  it("records the vote with the model, and replies 204", async () => {
+    const feedback = memoryFeedback();
+    app = await build({ feedback, modelId: "claude-opus-5-5:default" });
+
+    const res = await app.inject({ method: "POST", url: "/api/feedback", payload: VOTE });
+    expect(res.statusCode).toBe(204);
+    expect(feedback.recorded).toEqual([{ feedback: VOTE, modelId: "claude-opus-5-5:default" }]);
+  });
+
+  it("never records text, even if a client sends some", async () => {
+    const feedback = memoryFeedback();
+    app = await build({ feedback });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/feedback",
+      payload: { ...VOTE, name: "Sam", details: "private", message: "Sam, it's over." },
+    });
+    expect(JSON.stringify(feedback.recorded)).not.toMatch(/Sam|private|over/);
+  });
+
+  it.each([
+    ["an unknown vote", { ...VOTE, vote: "meh" }, "vote"],
+    ["a missing category", { ...VOTE, tone: undefined }, "tone"],
+  ])("rejects %s with 400", async (_label, payload, field) => {
+    const feedback = memoryFeedback();
+    app = await build({ feedback });
+
+    const res = await app.inject({ method: "POST", url: "/api/feedback", payload });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ issues: { path: string }[] }>().issues.map((i) => i.path)).toContain(field);
+    expect(feedback.record).not.toHaveBeenCalled();
+  });
+
+  it("replies 503 when the store is unavailable", async () => {
+    app = await build({ feedback: { record: vi.fn().mockRejectedValue(new Error("Connection is closed.")) } });
+    const res = await app.inject({ method: "POST", url: "/api/feedback", payload: VOTE });
+    expect(res.statusCode).toBe(503);
+  });
+});
+
+describe("POST /api/logistics", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+  const LOGISTICS_JSON = JSON.stringify({ message: "Could you let me know when suits you to pick up your things?" });
+  const QUESTIONNAIRE = { ...VALID, name: "Sam" };
+
+  it("streams a practical follow-up for the chosen topics, never cached", async () => {
+    const cache = memoryCache();
+    const generate = streamingGenerator(LOGISTICS_JSON);
+    app = await build({ cache, generate });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/logistics",
+      payload: { questionnaire: QUESTIONNAIRE, topics: ["belongings", "accounts"], notes: "Netflix is on my card" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(JSON.parse(LOGISTICS_JSON));
+
+    const call = generate.calls[0]!;
+    expect(call.system).toBe(LOGISTICS_SYSTEM_PROMPT);
+    expect(call.schema).toBe(LogisticsSchema);
+    expect(call.prompt).toContain("Returning belongings; Shared accounts and subscriptions");
+    expect(call.prompt).toContain("Netflix is on my card");
+    expect(call.prompt).not.toContain("Avoid meeting");
+    expect(cache.get).not.toHaveBeenCalled();
+  });
+
+  it("passes the safety flag through so handovers avoid meeting", async () => {
+    const generate = streamingGenerator(LOGISTICS_JSON);
+    app = await build({ generate });
+    await app.inject({
+      method: "POST",
+      url: "/api/logistics",
+      payload: { questionnaire: QUESTIONNAIRE, topics: ["belongings"], safetyConcern: true },
+    });
+    expect(generate.calls[0]!.prompt).toContain("Avoid meeting");
+  });
+
+  it.each([
+    ["no topics", { topics: [] }, "topics"],
+    ["an unknown topic", { topics: ["car"] }, "topics.0"],
+    ["a repeated topic", { topics: ["pets", "pets"] }, "topics"],
+    ["overly long notes", { topics: ["pets"], notes: "x".repeat(301) }, "notes"],
+  ])("rejects %s with 400", async (_label, extra, field) => {
+    const generate = streamingGenerator(LOGISTICS_JSON);
+    app = await build({ generate });
+
+    const res = await app.inject({ method: "POST", url: "/api/logistics", payload: { questionnaire: QUESTIONNAIRE, ...extra } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ issues: { path: string }[] }>().issues.map((i) => i.path)).toContain(field);
+    expect(generate.calls).toHaveLength(0);
+  });
+});
+
+describe("POST /api/practice", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+  const REPLY_JSON = JSON.stringify({ theySay: "Wait, why?", coachTip: "", conversationOver: false });
+  const base = { questionnaire: { ...VALID, name: "Sam" }, message: "Sam, I'm ending things." };
+  const practise = (payload: unknown) => app!.inject({ method: "POST", url: "/api/practice", payload: payload as object });
+  const turns = (n: number) => Array.from({ length: n }, (_, i) => ({ role: i % 2 === 0 ? "them" : "you", text: `line ${i}` }));
+
+  it("streams the other person's next reply, never cached", async () => {
+    const cache = memoryCache();
+    const generate = streamingGenerator(REPLY_JSON);
+    app = await build({ cache, generate });
+
+    const res = await practise({ ...base, turns: [] });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(JSON.parse(REPLY_JSON));
+    expect(generate.calls[0]!.system).toBe(PRACTICE_SYSTEM_PROMPT);
+    expect(generate.calls[0]!.schema).toBe(PracticeReplySchema);
+    expect(cache.get).not.toHaveBeenCalled();
+  });
+
+  it("accepts a full conversation of 8 replies", async () => {
+    app = await build({ generate: streamingGenerator(REPLY_JSON) });
+    expect((await practise({ ...base, turns: turns(16) })).statusCode).toBe(200);
+  });
+
+  it.each([
+    ["more than 8 replies", turns(18)],
+    ["turns that don't alternate", [{ role: "them", text: "Why?" }, { role: "them", text: "Hello?" }]],
+    ["a conversation starting with the user", [{ role: "you", text: "Hi" }, { role: "them", text: "Why?" }]],
+    ["a conversation not ending on the user's reply", [{ role: "them", text: "Why?" }]],
+    ["an empty reply", [{ role: "them", text: "Why?" }, { role: "you", text: "   " }]],
+  ])("rejects %s with 400", async (_label, badTurns) => {
+    const generate = streamingGenerator(REPLY_JSON);
+    app = await build({ generate });
+    const res = await practise({ ...base, turns: badTurns });
+    expect(res.statusCode).toBe(400);
+    expect(generate.calls).toHaveLength(0);
   });
 });

@@ -7,27 +7,60 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react";
 import {
   DETAILS_MAX_LENGTH,
-  DURATION_LABELS,
+  durationLabel,
+  DurationSchema,
+  ENDING_LABELS,
   MEDIUM_LABELS,
   NAME_MAX_LENGTH,
   QuestionnaireSchema,
   REASON_LABELS,
+  REASONS_BY_ENDING,
   TONE_LABELS,
+  type Ending,
   type Questionnaire,
   type QuestionnaireInput,
 } from "@caas/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type ChoiceField = "duration" | "reason" | "tone" | "medium";
+type ChoiceField = "ending" | "duration" | "reason" | "tone" | "medium";
+type ChoiceStep = { field: ChoiceField; title: string; options: Record<string, string> };
 
-const CHOICE_STEPS: { field: ChoiceField; title: string; options: Record<string, string> }[] = [
-  { field: "duration", title: "How long were you together?", options: DURATION_LABELS },
-  { field: "reason", title: "What's the main reason?", options: REASON_LABELS },
-  { field: "tone", title: "How do you want it to sound?", options: TONE_LABELS },
-  { field: "medium", title: "How will you tell them?", options: MEDIUM_LABELS },
-];
-const STEP_COUNT = CHOICE_STEPS.length + 1; // + the optional details step
+const DURATION_TITLES: Record<Ending, string> = {
+  relationship: "How long were you together?",
+  situationship: "How long has it been going on?",
+  friendship: "How long have you been friends?",
+  "ghosting-apology": "How long did you know each other?",
+  "reply-to-breakup": "How long were you together?",
+};
+const REASON_TITLES: Record<Ending, string> = {
+  relationship: "What's the main reason?",
+  situationship: "What's the main reason?",
+  friendship: "What's the main reason?",
+  "ghosting-apology": "Why did you go quiet?",
+  "reply-to-breakup": "What do you want to say?",
+};
+const MEDIUM_TITLES: Partial<Record<Ending, string>> = { "reply-to-breakup": "How will you reply?" };
+
+/** The questions adapt to what's being ended (until it's chosen, they read as a relationship). */
+function choiceSteps(ending: Ending = "relationship"): ChoiceStep[] {
+  return [
+    { field: "ending", title: "What are you ending?", options: ENDING_LABELS },
+    {
+      field: "duration",
+      title: DURATION_TITLES[ending],
+      options: Object.fromEntries(DurationSchema.options.map((d) => [d, durationLabel(ending, d)])),
+    },
+    {
+      field: "reason",
+      title: REASON_TITLES[ending],
+      options: Object.fromEntries(REASONS_BY_ENDING[ending].map((r) => [r, REASON_LABELS[r]])),
+    },
+    { field: "tone", title: "How do you want it to sound?", options: TONE_LABELS },
+    { field: "medium", title: MEDIUM_TITLES[ending] ?? "How will you tell them?", options: MEDIUM_LABELS },
+  ];
+}
+const STEP_COUNT = choiceSteps().length + 1; // + the optional details step
 
 export function Wizard({
   initial,
@@ -45,11 +78,14 @@ export function Wizard({
   const values = useWatch({ control });
   const details = values.details ?? "";
 
-  const choice = CHOICE_STEPS[step];
+  const choice = choiceSteps(values.ending)[step];
   const selected = choice ? values[choice.field] : undefined;
 
   function choose(field: ChoiceField, value: string) {
-    setValue(field, value as never, { shouldValidate: true });
+    if (field === "ending" && values.reason && !REASONS_BY_ENDING[value as Ending].includes(values.reason)) {
+      setValue("reason", undefined as never); // that reason doesn't exist for the new kind of ending
+    }
+    setValue(field, value as never, { shouldValidate: field !== "ending" });
     setStep((s) => s + 1);
   }
 

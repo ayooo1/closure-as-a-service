@@ -5,7 +5,7 @@
 | `namespace.yaml` | `caas` namespace |
 | `configmap.yaml` | Non-secret env for the API |
 | `secret.example.yaml` | Template for `caas-secrets` (`ANTHROPIC_API_KEY`); the real one is created from `.env` |
-| `redis.yaml` | Redis Deployment + Service (rate limiting & cache) |
+| `redis.yaml` | Redis Deployment, Service and 1Gi PVC (rate limiting, cache, and persisted 👍/👎 feedback) |
 | `deployment.yaml` | `api` and `web` Deployments with startup/liveness/readiness probes |
 | `service.yaml` | ClusterIP Services for `api` and `web` |
 | `ingress.yaml` | `/api` → api, `/` → web |

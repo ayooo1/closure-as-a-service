@@ -4,6 +4,7 @@ import rateLimit from "@fastify/rate-limit";
 import type { Redis } from "ioredis";
 import type { Env } from "./config.js";
 import { createCache } from "./lib/cache.js";
+import { createFeedbackStore } from "./lib/feedback.js";
 import type { TextGenerator } from "./lib/generator.js";
 import { generateRoutes } from "./routes/generate.js";
 import { healthRoutes } from "./routes/health.js";
@@ -43,7 +44,13 @@ export async function buildServer({ env, redis, generate, logger }: ServerDeps) 
     app.log.warn({ err }, "Generation cache unavailable"),
   );
   const modelId = `${env.AI_MODEL}:${env.AI_EFFORT ?? "default"}`;
-  await app.register(generateRoutes, { prefix: "/api", generate, modelId, cache });
+  await app.register(generateRoutes, {
+    prefix: "/api",
+    generate,
+    modelId,
+    cache,
+    feedback: createFeedbackStore(redis),
+  });
 
   return app;
 }

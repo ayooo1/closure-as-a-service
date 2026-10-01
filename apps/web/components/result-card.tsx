@@ -1,8 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Check, Copy, Mail, MessageCircleQuestion, MessageSquare, Pencil, Undo2, Wand2 } from "lucide-react";
+import {
+  Check,
+  MessageCircleQuestion,
+  MessagesSquare,
+  Pencil,
+  Square,
+  ThumbsDown,
+  ThumbsUp,
+  Undo2,
+  Volume2,
+  Wand2,
+} from "lucide-react";
 import {
   MESSAGE_MAX_LENGTH,
   REFINEMENT_LABELS,
@@ -11,49 +22,53 @@ import {
   type Refined,
   type Refinement,
 } from "@caas/shared";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { PracticePanel } from "@/components/practice-panel";
+import { CopyButton, SendLink } from "@/components/share-actions";
+import { Button } from "@/components/ui/button";
 import { useJsonStream } from "@/hooks/use-json-stream";
-import { mailtoHref, smsHref, streamRefine, streamReplies, type PartialReply, type PartialVariation } from "@/lib/generation";
+import { useSpeech } from "@/hooks/use-speech";
+import {
+  sendFeedback,
+  streamRefine,
+  streamReplies,
+  type PartialReply,
+  type PartialVariation,
+} from "@/lib/generation";
+import { cn } from "@/lib/utils";
 
 const NO_REFINEMENT: Partial<Refined> = {};
 const NO_REPLIES: PartialReply[] = [];
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(t);
-  }, [copied]);
-
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => {
-        void navigator.clipboard.writeText(text).then(() => setCopied(true));
-      }}
-    >
-      {copied ? <Check /> : <Copy />}
-      {copied ? "Copied" : "Copy"}
-    </Button>
-  );
-}
-
-function SendLink({ medium, message }: { medium: Medium; message: string }) {
-  if (medium === "in-person") return null;
-  const isText = medium === "text";
-  return (
-    <a href={isText ? smsHref(message) : mailtoHref(message)} className={buttonVariants({ variant: "outline", size: "sm" })}>
-      {isText ? <MessageSquare /> : <Mail />}
-      {isText ? "Open in Messages" : "Open in Mail"}
-    </a>
-  );
-}
-
 const Caret = () => (
   <span className="ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 animate-pulse bg-primary" aria-hidden />
 );
+
+function Vote({ onVote }: { onVote: (vote: "up" | "down") => void }) {
+  const [vote, setVote] = useState<"up" | "down" | null>(null);
+  const choose = (v: "up" | "down") => {
+    setVote(v);
+    onVote(v);
+  };
+  return (
+    <div className="ml-auto flex items-center gap-1" role="group" aria-label="Rate this message">
+      {vote && <span className="mr-1 text-xs text-muted-foreground">Thanks!</span>}
+      {(["up", "down"] as const).map((v) => (
+        <Button
+          key={v}
+          variant="ghost"
+          size="icon"
+          aria-label={v === "up" ? "Helpful" : "Not helpful"}
+          aria-pressed={vote === v}
+          disabled={vote !== null}
+          onClick={() => choose(v)}
+          className={cn("size-8", vote === v && "text-primary disabled:opacity-100")}
+        >
+          {v === "up" ? <ThumbsUp /> : <ThumbsDown />}
+        </Button>
+      ))}
+    </div>
+  );
+}
 
 function RepliesPanel({ replies, streaming }: { replies: PartialReply[]; streaming: boolean }) {
   return (
@@ -87,6 +102,7 @@ export function ResultCard({
   medium,
   questionnaire,
   safetyConcern,
+  onShare,
 }: {
   variation: PartialVariation | undefined;
   index: number;
@@ -97,13 +113,17 @@ export function ResultCard({
   medium: Medium;
   questionnaire: Questionnaire;
   safetyConcern: boolean;
+  /** The user copied or opened the message to send it. */
+  onShare: () => void;
 }) {
   const reduceMotion = useReducedMotion();
+  const speech = useSpeech();
   // The user's own version of this message (after an edit or a rewrite), and the one before it.
   const [override, setOverride] = useState<string | null>(null);
   const [previous, setPrevious] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [rewriteOpen, setRewriteOpen] = useState(false);
+  const [practising, setPractising] = useState(false);
   const refine = useJsonStream(streamRefine, NO_REFINEMENT);
   const replies = useJsonStream(streamReplies, NO_REPLIES);
 
@@ -111,7 +131,8 @@ export function ResultCard({
   const refining = refine.status === "streaming";
   // While a rewrite streams, show it in place of the message.
   const message = refining ? (refine.data.message ?? "") : (override ?? original);
-  const busy = refining || replies.status === "streaming";
+  // While practising, the message is fixed: it's the conversation's opening line.
+  const busy = refining || replies.status === "streaming" || practising;
 
   function replaceMessage(next: string) {
     setPrevious(message);
@@ -174,8 +195,19 @@ export function ResultCard({
               </Button>
             ) : (
               <>
-                <CopyButton text={message} />
-                <SendLink medium={medium} message={message} />
+                <CopyButton text={message} onCopy={onShare} />
+                <SendLink medium={medium} message={message} onSend={onShare} />
+                {speech.supported && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={speech.speaking}
+                    onClick={() => (speech.speaking ? speech.stop() : speech.speak(message))}
+                  >
+                    {speech.speaking ? <Square /> : <Volume2 />}
+                    {speech.speaking ? "Stop reading" : "Read aloud"}
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -210,6 +242,21 @@ export function ResultCard({
                     <Undo2 /> Undo
                   </Button>
                 )}
+                <Vote
+                  onVote={(vote) => {
+                    const { ending, duration, reason, tone, medium: chosenMedium } = questionnaire;
+                    void sendFeedback({
+                      vote,
+                      ending,
+                      duration,
+                      reason,
+                      tone,
+                      medium: chosenMedium,
+                      changed: message !== original,
+                      safetyConcern,
+                    });
+                  }}
+                />
               </>
             )}
           </div>
@@ -224,24 +271,36 @@ export function ResultCard({
             </div>
           )}
 
-          {!editing &&
-            (safetyConcern ? null : replies.status === "idle" ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="mt-2 -ml-2"
-                disabled={busy}
-                onClick={() => void replies.start({ questionnaire, message })}
-              >
-                <MessageCircleQuestion /> What if they reply?
-              </Button>
-            ) : replies.status === "error" ? (
-              <p role="alert" className="mt-3 text-sm text-primary">
-                {replies.error.message}
-              </p>
-            ) : (
-              <RepliesPanel replies={replies.data} streaming={replies.status === "streaming"} />
-            ))}
+          {/* Rehearsal tools are hidden when the user may be unsafe: they owe this person no conversation. */}
+          {!editing && !safetyConcern && (
+            <>
+              {(replies.status === "idle" || !practising) && (
+                <div className="mt-2 -ml-2 flex flex-wrap">
+                  {replies.status === "idle" && (
+                    <Button variant="ghost" size="sm" disabled={busy} onClick={() => void replies.start({ questionnaire, message })}>
+                      <MessageCircleQuestion /> What if they reply?
+                    </Button>
+                  )}
+                  {!practising && (
+                    <Button variant="ghost" size="sm" disabled={busy} onClick={() => setPractising(true)}>
+                      <MessagesSquare /> Practise the conversation
+                    </Button>
+                  )}
+                </div>
+              )}
+              {replies.status === "error" && (
+                <p role="alert" className="mt-3 text-sm text-primary">
+                  {replies.error.message}
+                </p>
+              )}
+              {(replies.status === "streaming" || replies.status === "done") && (
+                <RepliesPanel replies={replies.data} streaming={replies.status === "streaming"} />
+              )}
+              {practising && (
+                <PracticePanel questionnaire={questionnaire} message={message} onClose={() => setPractising(false)} />
+              )}
+            </>
+          )}
         </>
       )}
     </motion.article>
