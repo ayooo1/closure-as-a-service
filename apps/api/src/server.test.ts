@@ -2,15 +2,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadEnv, type Env } from "./config.js";
 import { createRedis } from "./lib/redis.js";
 import { buildServer } from "./server.js";
-import { SAMPLE_GENERATION, streamingModel } from "./testing/mock-model.js";
+import { SAMPLE_GENERATION, streamingGenerator } from "./testing/fake-generator.js";
 
 // Never connected (lazyConnect): exercises the "Redis is down" paths without a real server.
 const redis = createRedis("redis://127.0.0.1:1", () => {});
 
 async function build(overrides: Partial<Record<keyof Env, string>> = {}) {
-  const env = loadEnv({ OPENAI_API_KEY: "sk-test", NODE_ENV: "test", ...overrides });
-  const model = streamingModel(JSON.stringify(SAMPLE_GENERATION));
-  const app = await buildServer({ env, redis, model, logger: false });
+  const env = loadEnv({ ANTHROPIC_API_KEY: "sk-ant-test", NODE_ENV: "test", ...overrides });
+  const generate = streamingGenerator(JSON.stringify(SAMPLE_GENERATION));
+  const app = await buildServer({ env, redis, generate, logger: false });
   app.get("/ip", (req) => ({ ip: req.ip }));
   app.get("/limited", { config: { rateLimit: { max: 1, timeWindow: 60_000 } } }, () => "ok");
   return app;
@@ -73,7 +73,7 @@ describe("buildServer", () => {
     expect(res.statusCode).toBe(503);
   });
 
-  it("serves /api/generate, falling back to the model when the cache is unavailable", async () => {
+  it("serves /api/generate, falling back to the generator when the cache is unavailable", async () => {
     app = await build();
     const res = await app.inject({
       method: "POST",
@@ -91,9 +91,9 @@ describe.skipIf(!REDIS_TEST_URL)("rate limiting with real Redis", () => {
   it("shares the per-IP limit across replicas", async () => {
     const shared = createRedis(REDIS_TEST_URL!, () => {});
     await shared.connect();
-    const env = loadEnv({ OPENAI_API_KEY: "sk-test", NODE_ENV: "test", RATE_LIMIT_MAX: "2" });
-    const model = streamingModel(JSON.stringify(SAMPLE_GENERATION));
-    const replicas = await Promise.all([1, 2].map(() => buildServer({ env, redis: shared, model, logger: false })));
+    const env = loadEnv({ ANTHROPIC_API_KEY: "sk-ant-test", NODE_ENV: "test", RATE_LIMIT_MAX: "2" });
+    const generate = streamingGenerator(JSON.stringify(SAMPLE_GENERATION));
+    const replicas = await Promise.all([1, 2].map(() => buildServer({ env, redis: shared, generate, logger: false })));
     // A fresh client IP per run so counters from earlier runs don't interfere.
     const ip = `203.0.113.${Math.floor(Math.random() * 254) + 1}`;
 

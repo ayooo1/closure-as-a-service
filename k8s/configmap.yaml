@@ -4,7 +4,8 @@ metadata:
   name: caas-config
 data:
   NODE_ENV: production
-  OPENAI_MODEL: gpt-4o-mini
+  # claude-haiku-4-5 (default) or claude-opus-5-5; AI_EFFORT (Opus only) is optional.
+  AI_MODEL: claude-haiku-4-5
   REDIS_URL: redis://redis:6379
   CORS_ORIGIN: http://localhost:8080
   RATE_LIMIT_MAX: "10"

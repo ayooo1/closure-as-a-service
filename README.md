@@ -11,7 +11,7 @@ This project is also a **full-stack and cloud-native showcase**: a Next.js front
 ## ✨ Features
 
 - **Multi-step wizard**: relationship duration → reason → tone → medium → optional details, validated end to end with Zod
-- **Real-time AI streaming**: three variations streamed token by token via the Vercel AI SDK and OpenAI
+- **Real-time AI streaming**: three variations streamed token by token from Claude (Haiku 4.5 by default, Opus 5.5 configurable)
 - **Actionable result cards**: one-click copy, `sms:` deep links, and quick tone-tweak regeneration
 - **Redis-backed rate limiting**: per-IP limits shared across every API replica
 - **Prompt result caching**: identical questionnaire inputs are served from Redis
@@ -25,7 +25,7 @@ flowchart LR
     I -->|/| W[web<br/>Next.js]
     I -->|/api| A[api<br/>Fastify]
     A -->|rate limit + cache| R[(Redis)]
-    A -->|stream| O[OpenAI API]
+    A -->|stream| O[Claude API]
     subgraph K8s cluster
       I
       W
@@ -37,7 +37,7 @@ flowchart LR
 | Layer | Tech |
 | --- | --- |
 | Frontend | Next.js (App Router), TypeScript, Tailwind CSS v4, shadcn/ui, Motion (Framer Motion), React Hook Form |
-| Backend | Node.js 22, Fastify 5, Vercel AI SDK, OpenAI |
+| Backend | Node.js 22, Fastify 5, Anthropic TypeScript SDK (Claude) |
 | Shared | Zod schema + inferred types (`@caas/shared`) |
 | Data | Redis (rate limiting and response cache) |
 | Infra | Docker (multi-stage), docker-compose, Kubernetes (Minikube / k3d / Kind) |
@@ -72,12 +72,12 @@ flowchart LR
 
 - Node.js 22+ (`nvm use`)
 - Docker (for Redis locally and for container builds)
-- An OpenAI API key
+- An Anthropic API key ([console.anthropic.com](https://console.anthropic.com))
 
 ### Local development
 
 ```bash
-cp .env.example .env            # then add your OPENAI_API_KEY
+cp .env.example .env            # then add your ANTHROPIC_API_KEY
 npm install
 docker run -d --name caas-redis -p 6379:6379 redis:7-alpine
 npm run dev                     # web → http://localhost:3000, api → http://localhost:4000
@@ -88,7 +88,7 @@ The Next.js dev server proxies `/api/*` to the Fastify API, so the browser alway
 ### Tests
 
 ```bash
-npm test                        # unit + HTTP tests (Vitest, Fastify inject, mock model — no Redis or OpenAI needed)
+npm test                        # unit + HTTP tests (Vitest, Fastify inject, fake generator — no Redis or API key needed)
 REDIS_TEST_URL=redis://localhost:6379 npm test   # also run the cross-replica rate-limit test
 npm run lint                    # ESLint (type-aware TS rules + Next.js rules for apps/web)
 npm run typecheck
@@ -105,7 +105,7 @@ docker compose up --build
 
 ```bash
 brew install k3d                # plus a Docker runtime (Docker Desktop, OrbStack, Colima)
-cp .env.example .env            # add OPENAI_API_KEY; it becomes the caas-secrets Secret
+cp .env.example .env            # add ANTHROPIC_API_KEY; it becomes the caas-secrets Secret
 ./scripts/k8s-local.sh up       # cluster + images + deploy  →  http://localhost:8080
 ```
 
@@ -139,6 +139,15 @@ token by token on a cache miss (`x-cache: miss`) or sent whole on a hit (`x-cach
 | 413 | Body over 4 KB |
 | 429 | Rate limit exceeded |
 | 502 | The model provider failed before producing output |
+
+### Choosing the model
+
+| `AI_MODEL` | Use it for |
+| --- | --- |
+| `claude-haiku-4-5` (default) | Fast, low-cost generations (~2.5s to first token, ~6s total) |
+| `claude-opus-5-5` | The most thoughtful writing (~2-3s to first token, ~8s total, ~4x the cost). Gets server-side refusal fallbacks automatically; set `AI_EFFORT` to tune depth |
+
+Set it in [`k8s/configmap.yaml`](k8s/configmap.yaml) (or `.env` locally). The response cache is keyed per model, so switching never serves the other model's output.
 
 ## 🩺 Health endpoints
 

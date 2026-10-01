@@ -4,7 +4,7 @@
 | --- | --- |
 | `namespace.yaml` | `caas` namespace |
 | `configmap.yaml` | Non-secret env for the API |
-| `secret.example.yaml` | Template for `caas-secrets` (`OPENAI_API_KEY`); the real one is created from `.env` |
+| `secret.example.yaml` | Template for `caas-secrets` (`ANTHROPIC_API_KEY`); the real one is created from `.env` |
 | `redis.yaml` | Redis Deployment + Service (rate limiting & cache) |
 | `deployment.yaml` | `api` and `web` Deployments with startup/liveness/readiness probes |
 | `service.yaml` | ClusterIP Services for `api` and `web` |
@@ -26,6 +26,18 @@ open http://localhost:8080
 
 Images are built locally as `caas-web:local` / `caas-api:local` and imported into the
 cluster with `k3d image import`, so no registry is needed.
+
+## Client IPs and rate limiting
+
+The API rate-limits per client IP, read from `X-Forwarded-For` set by the Ingress controller. That only works if
+the controller sees the real client address:
+
+- **k3d (local):** the built-in load balancer rewrites the source address to the receiving node's, so each node
+  looks like one client. With two nodes, a single client gets roughly twice `RATE_LIMIT_MAX` per window.
+  Expected locally and harmless.
+- **Cloud:** preserve the source IP at the edge. Set `externalTrafficPolicy: Local` on the Ingress controller's
+  `LoadBalancer` Service, or enable PROXY protocol on both the cloud load balancer and the controller. Otherwise
+  all traffic is limited as if it came from a handful of node IPs.
 
 ## Deploy the published images
 

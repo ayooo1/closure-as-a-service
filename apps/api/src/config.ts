@@ -1,11 +1,19 @@
 import { z } from "zod";
 
+export const AI_MODELS = ["claude-haiku-4-5", "claude-opus-5-5"] as const;
+export type AiModel = (typeof AI_MODELS)[number];
+export const AI_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type AiEffort = (typeof AI_EFFORTS)[number];
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
   HOST: z.string().default("0.0.0.0"),
-  OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
-  OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required"),
+  // Haiku 4.5: fast and cheap. Opus 5.5: most thoughtful, slower, ~4x the price.
+  AI_MODEL: z.enum(AI_MODELS).default("claude-haiku-4-5"),
+  // Opus only (Haiku ignores it); unset uses the model's default.
+  AI_EFFORT: z.enum(AI_EFFORTS).optional(),
   REDIS_URL: z.string().url().default("redis://localhost:6379"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   // Proxy addresses allowed to set X-Forwarded-For (proxy-addr names or CIDRs; "" disables).

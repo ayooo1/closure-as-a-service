@@ -1,5 +1,6 @@
-import { createOpenAI } from "@ai-sdk/openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { loadEnv } from "./config.js";
+import { createClaudeGenerator } from "./lib/generator.js";
 import { createRedis } from "./lib/redis.js";
 import { buildServer } from "./server.js";
 
@@ -7,8 +8,9 @@ const env = loadEnv();
 
 // The error handler only fires after connect(), by which point `app` is initialised.
 const redis = createRedis(env.REDIS_URL, (err) => app.log.warn({ err: err.message }, "Redis error"));
-const model = createOpenAI({ apiKey: env.OPENAI_API_KEY })(env.OPENAI_MODEL);
-const app = await buildServer({ env, redis, model });
+const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+const generate = createClaudeGenerator(anthropic, env.AI_MODEL, env.AI_EFFORT);
+const app = await buildServer({ env, redis, generate });
 
 await redis.connect().catch((err) => {
   // Don't crash: /readyz reports not-ready and K8s withholds traffic until Redis is back.
