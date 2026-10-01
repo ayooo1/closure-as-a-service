@@ -1,10 +1,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (@media (prefers-color-scheme: dark));
 
 /* Base tokens. `npx shadcn add <component>` extends these as needed. */
 :root {
+  color-scheme: light dark;
   --radius: 0.75rem;
   --background: oklch(0.985 0.004 20);
   --foreground: oklch(0.2 0.02 20);
@@ -18,17 +19,20 @@
   --ring: oklch(0.58 0.2 15);
 }
 
-.dark {
-  --background: oklch(0.16 0.015 20);
-  --foreground: oklch(0.96 0.005 20);
-  --card: oklch(0.2 0.018 20);
-  --card-foreground: oklch(0.96 0.005 20);
-  --primary: oklch(0.68 0.19 15);
-  --primary-foreground: oklch(0.16 0.015 20);
-  --muted: oklch(0.26 0.018 20);
-  --muted-foreground: oklch(0.7 0.02 20);
-  --border: oklch(0.3 0.018 20);
-  --ring: oklch(0.68 0.19 15);
+/* Follows the OS setting. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.16 0.015 20);
+    --foreground: oklch(0.96 0.005 20);
+    --card: oklch(0.2 0.018 20);
+    --card-foreground: oklch(0.96 0.005 20);
+    --primary: oklch(0.68 0.19 15);
+    --primary-foreground: oklch(0.16 0.015 20);
+    --muted: oklch(0.26 0.018 20);
+    --muted-foreground: oklch(0.7 0.02 20);
+    --border: oklch(0.3 0.018 20);
+    --ring: oklch(0.68 0.19 15);
+  }
 }
 
 @theme inline {
