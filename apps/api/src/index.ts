@@ -1,3 +1,4 @@
+import { createOpenAI } from "@ai-sdk/openai";
 import { loadEnv } from "./config.js";
 import { createRedis } from "./lib/redis.js";
 import { buildServer } from "./server.js";
@@ -6,7 +7,8 @@ const env = loadEnv();
 
 // The error handler only fires after connect(), by which point `app` is initialised.
 const redis = createRedis(env.REDIS_URL, (err) => app.log.warn({ err: err.message }, "Redis error"));
-const app = await buildServer({ env, redis });
+const model = createOpenAI({ apiKey: env.OPENAI_API_KEY })(env.OPENAI_MODEL);
+const app = await buildServer({ env, redis, model });
 
 await redis.connect().catch((err) => {
   // Don't crash: /readyz reports not-ready and K8s withholds traffic until Redis is back.
