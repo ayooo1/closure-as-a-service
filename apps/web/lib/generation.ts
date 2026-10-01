@@ -2,6 +2,8 @@ import { Allow, parse } from "partial-json";
 import type {
   Feedback,
   Generation,
+  Logistics,
+  LogisticsRequest,
   QuestionnaireInput,
   RefineRequest,
   Refined,
@@ -126,6 +128,10 @@ export function streamRefine(input: RefineRequest, opts?: StreamOptions): AsyncG
 
 export function streamReplies(input: RepliesRequest, opts?: StreamOptions): AsyncGenerator<PartialReply[]> {
   return streamJson("/api/replies", input, (p) => objectsIn(p?.replies) as PartialReply[], opts);
+}
+
+export function streamLogistics(input: LogisticsRequest, opts?: StreamOptions): AsyncGenerator<Partial<Logistics>> {
+  return streamJson("/api/logistics", input, (p) => (typeof p?.message === "string" ? { message: p.message } : {}), opts);
 }
 
 /** iOS and Android both accept `sms:?&body=`; there's no recipient, the user picks one. */

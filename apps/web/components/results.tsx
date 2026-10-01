@@ -1,7 +1,8 @@
 "use client";
 
 import { RotateCcw, Square } from "lucide-react";
-import { TONE_LABELS, VARIATION_COUNT, type Questionnaire, type Tone } from "@caas/shared";
+import { LOGISTICS_ENDINGS, TONE_LABELS, VARIATION_COUNT, type Questionnaire, type Tone } from "@caas/shared";
+import { LogisticsPanel } from "@/components/logistics-panel";
 import { ResultCard } from "@/components/result-card";
 import { SafetyNotice } from "@/components/safety-notice";
 import { Button } from "@/components/ui/button";
@@ -79,6 +80,10 @@ export function Results({
           />
         ))}
       </div>
+
+      {done && shown.length > 0 && LOGISTICS_ENDINGS.includes(questionnaire.ending) && (
+        <LogisticsPanel questionnaire={questionnaire} safetyConcern={safetyConcern} onShare={() => {}} />
+      )}
 
       {done && shown.length > 0 && (
         <div className="space-y-2 pt-2">

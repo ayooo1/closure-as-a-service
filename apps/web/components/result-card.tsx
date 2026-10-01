@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Check, Copy, Mail, MessageCircleQuestion, MessageSquare, Pencil, ThumbsDown, ThumbsUp, Undo2, Wand2 } from "lucide-react";
+import { Check, MessageCircleQuestion, Pencil, ThumbsDown, ThumbsUp, Undo2, Wand2 } from "lucide-react";
 import {
   MESSAGE_MAX_LENGTH,
   REFINEMENT_LABELS,
@@ -11,12 +11,11 @@ import {
   type Refined,
   type Refinement,
 } from "@caas/shared";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { CopyButton, SendLink } from "@/components/share-actions";
+import { Button } from "@/components/ui/button";
 import { useJsonStream } from "@/hooks/use-json-stream";
 import {
-  mailtoHref,
   sendFeedback,
-  smsHref,
   streamRefine,
   streamReplies,
   type PartialReply,
@@ -26,39 +25,6 @@ import { cn } from "@/lib/utils";
 
 const NO_REFINEMENT: Partial<Refined> = {};
 const NO_REPLIES: PartialReply[] = [];
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(t);
-  }, [copied]);
-
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => {
-        void navigator.clipboard.writeText(text).then(() => setCopied(true));
-      }}
-    >
-      {copied ? <Check /> : <Copy />}
-      {copied ? "Copied" : "Copy"}
-    </Button>
-  );
-}
-
-function SendLink({ medium, message }: { medium: Medium; message: string }) {
-  if (medium === "in-person") return null;
-  const isText = medium === "text";
-  return (
-    <a href={isText ? smsHref(message) : mailtoHref(message)} className={buttonVariants({ variant: "outline", size: "sm" })}>
-      {isText ? <MessageSquare /> : <Mail />}
-      {isText ? "Open in Messages" : "Open in Mail"}
-    </a>
-  );
-}
 
 const Caret = () => (
   <span className="ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 animate-pulse bg-primary" aria-hidden />

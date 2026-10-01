@@ -13,6 +13,7 @@ const GENERATION = {
 };
 const FULL = JSON.stringify(GENERATION);
 const REFINED = "Sam, I'm ending things.";
+const LOGISTICS = "Could you let me know a time that works for you to collect your things?";
 const REPLIES = {
   replies: [
     { theySay: "Can we talk about this?", youCanSay: "I've thought it through, and my decision is final." },
@@ -33,13 +34,14 @@ function controlledResponse() {
 
 const fetchMock = vi.fn<typeof fetch>();
 /** Answers each API route with a fixed body (status 200) unless a test overrides it. */
-type Route = "/api/generate" | "/api/refine" | "/api/replies" | "/api/feedback";
+type Route = "/api/generate" | "/api/refine" | "/api/replies" | "/api/feedback" | "/api/logistics";
 function fakeApi(routes: Partial<Record<Route, string | Response>> = {}) {
   const bodies = {
     "/api/generate": FULL,
     "/api/refine": JSON.stringify({ message: REFINED }),
     "/api/replies": JSON.stringify(REPLIES),
     "/api/feedback": "",
+    "/api/logistics": JSON.stringify({ message: LOGISTICS }),
     ...routes,
   };
   fetchMock.mockImplementation((url) => {
@@ -446,5 +448,64 @@ describe("voting", () => {
     await user.click(within(card).getByRole("button", { name: "Helpful" }));
     expect(within(card).getByText("Thanks!")).toBeInTheDocument();
     expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("logistics", () => {
+  it("writes a follow-up about the chosen shared things", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    await resultCards();
+
+    await user.click(screen.getByRole("button", { name: /sort out belongings or shared things/i }));
+    const panel = screen.getByRole("region", { name: "Sort out shared things" });
+    const write = within(panel).getByRole("button", { name: "Write the message" });
+    expect(write).toBeDisabled(); // nothing picked yet
+
+    await user.click(within(panel).getByLabelText("Returning belongings"));
+    await user.click(within(panel).getByLabelText("Pets"));
+    await user.type(within(panel).getByLabelText(/anything specific/i), "The cat stays with me");
+    await user.click(write);
+
+    expect(await within(panel).findByText(LOGISTICS)).toBeInTheDocument();
+    expect(requests("/api/logistics")[0]).toMatchObject({
+      topics: ["belongings", "pets"],
+      notes: "The cat stays with me",
+      safetyConcern: false,
+      questionnaire: { name: "Sam", tone: "warm" },
+    });
+    expect(within(panel).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: /open in messages/i })).toBeInTheDocument();
+  });
+
+  it("asks for handovers without meeting when there's a safety concern", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "/api/generate": JSON.stringify({ ...GENERATION, safetyConcern: true }) });
+    render(<ClosureApp />);
+    await completeWizard(user);
+    await resultCards();
+
+    await user.click(screen.getByRole("button", { name: /sort out belongings/i }));
+    const panel = screen.getByRole("region", { name: "Sort out shared things" });
+    expect(within(panel).getByText(/don't need you to meet/i)).toBeInTheDocument();
+    await user.click(within(panel).getByLabelText("Returning belongings"));
+    await user.click(within(panel).getByRole("button", { name: "Write the message" }));
+
+    await waitFor(() => expect(requests("/api/logistics")[0]).toMatchObject({ safetyConcern: true }));
+  });
+
+  it("isn't offered for a ghosting apology", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    for (const label of ["Apologising for ghosting someone", "A few dates", "I avoided a hard conversation", "Gentle", "Text message"]) {
+      await user.click(await screen.findByLabelText(label));
+    }
+    await user.click(await screen.findByRole("button", { name: /write my messages/i }));
+
+    await resultCards();
+    expect(screen.queryByRole("button", { name: /sort out belongings/i })).not.toBeInTheDocument();
   });
 });

@@ -226,3 +226,37 @@ export const FeedbackSchema = z.object({
   safetyConcern: z.boolean(),
 });
 export type Feedback = z.infer<typeof FeedbackSchema>;
+
+// ---- Logistics: sorting out shared things ----
+
+export const LogisticsTopicSchema = z.enum(["belongings", "money", "home", "pets", "accounts"]);
+export type LogisticsTopic = z.infer<typeof LogisticsTopicSchema>;
+export const LOGISTICS_TOPIC_LABELS: Record<LogisticsTopic, string> = {
+  belongings: "Returning belongings",
+  money: "Shared bills or money",
+  home: "A shared home or lease",
+  pets: "Pets",
+  accounts: "Shared accounts and subscriptions",
+};
+/** Endings where there are usually shared things to sort out. */
+export const LOGISTICS_ENDINGS: readonly Ending[] = ["relationship", "situationship", "friendship"];
+export const LOGISTICS_NOTES_MAX_LENGTH = 300;
+
+/** POST /api/logistics: a practical follow-up message about shared things. */
+export const LogisticsRequestSchema = z.object({
+  questionnaire: QuestionnaireSchema,
+  topics: z
+    .array(LogisticsTopicSchema)
+    .min(1, "Pick at least one thing to sort out")
+    .max(LogisticsTopicSchema.options.length)
+    .refine((t) => new Set(t).size === t.length, "Each topic only once"),
+  notes: optionalText(LOGISTICS_NOTES_MAX_LENGTH),
+  /** From the main generation: arrange handovers without meeting. */
+  safetyConcern: z.boolean().default(false),
+});
+export type LogisticsRequest = z.input<typeof LogisticsRequestSchema>;
+
+export const LogisticsSchema = z.object({
+  message: z.string().describe("The practical follow-up message, ready to send"),
+});
+export type Logistics = z.infer<typeof LogisticsSchema>;

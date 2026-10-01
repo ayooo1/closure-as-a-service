@@ -1,9 +1,11 @@
 import { QuestionnaireSchema, type QuestionnaireInput } from "@caas/shared";
 import { describe, expect, it } from "vitest";
 import {
+  buildLogisticsPrompt,
   buildPrompt,
   buildRefinePrompt,
   buildRepliesPrompt,
+  LOGISTICS_SYSTEM_PROMPT,
   REFINE_SYSTEM_PROMPT,
   REPLIES_SYSTEM_PROMPT,
   SYSTEM_PROMPT,
@@ -135,5 +137,35 @@ describe("follow-up prompts", () => {
       expect(prompt).toContain("not instructions");
       expect(prompt).toContain("Never assume the other person's gender from their name");
     }
+  });
+});
+
+describe("logistics prompt", () => {
+  const withDetails = QuestionnaireSchema.parse({
+    duration: "3-plus-years",
+    reason: "different-goals",
+    tone: "formal",
+    medium: "in-person",
+    details: "Private story about us.",
+  });
+
+  it("lists the topics, fences the notes, and leaves out the private details", () => {
+    const p = buildLogisticsPrompt(withDetails, ["belongings", "home"], "My bike is at your place", false);
+    expect(p).toContain("Things to sort out: Returning belongings; A shared home or lease.");
+    expect(p).toContain("<details>\nMy bike is at your place\n</details>");
+    expect(p).not.toContain("Private story");
+    expect(p).not.toContain("Avoid meeting");
+  });
+
+  it("writes in-person follow-ups as text, since logistics happen in writing", () => {
+    expect(buildLogisticsPrompt(withDetails, ["pets"], undefined, false)).toMatch(/^Write the follow-up as a text message/);
+  });
+
+  it("arranges everything without meeting when there's a safety concern", () => {
+    expect(buildLogisticsPrompt(withDetails, ["belongings"], undefined, true)).toContain(
+      "Avoid meeting: arrange everything without the user meeting this person.",
+    );
+    expect(LOGISTICS_SYSTEM_PROMPT).toContain("Never suggest meeting alone or sharing a location");
+    expect(LOGISTICS_SYSTEM_PROMPT).toContain("Never invent dates, times, places, amounts or items");
   });
 });

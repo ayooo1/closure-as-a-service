@@ -3,8 +3,8 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GenerationCache } from "../lib/cache.js";
 import type { TextGenerator } from "../lib/generator.js";
-import { GenerationSchema, RefinedSchema, RepliesSchema, type Feedback } from "@caas/shared";
-import { REFINE_SYSTEM_PROMPT, REPLIES_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../lib/prompt.js";
+import { GenerationSchema, LogisticsSchema, RefinedSchema, RepliesSchema, type Feedback } from "@caas/shared";
+import { LOGISTICS_SYSTEM_PROMPT, REFINE_SYSTEM_PROMPT, REPLIES_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../lib/prompt.js";
 import { failingGenerator, SAMPLE_GENERATION, streamingGenerator } from "../testing/fake-generator.js";
 import { generateRoutes, type GenerateDeps } from "./generate.js";
 
@@ -338,5 +338,60 @@ describe("POST /api/feedback", () => {
     app = await build({ feedback: { record: vi.fn().mockRejectedValue(new Error("Connection is closed.")) } });
     const res = await app.inject({ method: "POST", url: "/api/feedback", payload: VOTE });
     expect(res.statusCode).toBe(503);
+  });
+});
+
+describe("POST /api/logistics", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+  const LOGISTICS_JSON = JSON.stringify({ message: "Could you let me know when suits you to pick up your things?" });
+  const QUESTIONNAIRE = { ...VALID, name: "Sam" };
+
+  it("streams a practical follow-up for the chosen topics, never cached", async () => {
+    const cache = memoryCache();
+    const generate = streamingGenerator(LOGISTICS_JSON);
+    app = await build({ cache, generate });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/logistics",
+      payload: { questionnaire: QUESTIONNAIRE, topics: ["belongings", "accounts"], notes: "Netflix is on my card" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(JSON.parse(LOGISTICS_JSON));
+
+    const call = generate.calls[0]!;
+    expect(call.system).toBe(LOGISTICS_SYSTEM_PROMPT);
+    expect(call.schema).toBe(LogisticsSchema);
+    expect(call.prompt).toContain("Returning belongings; Shared accounts and subscriptions");
+    expect(call.prompt).toContain("Netflix is on my card");
+    expect(call.prompt).not.toContain("Avoid meeting");
+    expect(cache.get).not.toHaveBeenCalled();
+  });
+
+  it("passes the safety flag through so handovers avoid meeting", async () => {
+    const generate = streamingGenerator(LOGISTICS_JSON);
+    app = await build({ generate });
+    await app.inject({
+      method: "POST",
+      url: "/api/logistics",
+      payload: { questionnaire: QUESTIONNAIRE, topics: ["belongings"], safetyConcern: true },
+    });
+    expect(generate.calls[0]!.prompt).toContain("Avoid meeting");
+  });
+
+  it.each([
+    ["no topics", { topics: [] }, "topics"],
+    ["an unknown topic", { topics: ["car"] }, "topics.0"],
+    ["a repeated topic", { topics: ["pets", "pets"] }, "topics"],
+    ["overly long notes", { topics: ["pets"], notes: "x".repeat(301) }, "notes"],
+  ])("rejects %s with 400", async (_label, extra, field) => {
+    const generate = streamingGenerator(LOGISTICS_JSON);
+    app = await build({ generate });
+
+    const res = await app.inject({ method: "POST", url: "/api/logistics", payload: { questionnaire: QUESTIONNAIRE, ...extra } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ issues: { path: string }[] }>().issues.map((i) => i.path)).toContain(field);
+    expect(generate.calls).toHaveLength(0);
   });
 });

@@ -6,6 +6,7 @@ import {
   sendFeedback,
   smsHref,
   streamGeneration,
+  streamLogistics,
   streamRefine,
   streamReplies,
 } from "./generation";
@@ -149,6 +150,13 @@ describe("follow-up streams", () => {
     expect(fetchImpl).toHaveBeenCalledWith("/api/replies", expect.objectContaining({ body: JSON.stringify(followUp) }));
     expect(yields[0]).toEqual([{ theySay: "Why?" }]); // youCanSay not started yet
     expect(yields.at(-1)).toEqual([{ theySay: "Why?", youCanSay: "We want different things." }]);
+  });
+
+  it("streamLogistics POSTs to /api/logistics and yields the growing message", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(streamingResponse(['{"message":"When', ' suits you?"}']));
+    const yields = await collect(streamLogistics({ questionnaire: INPUT, topics: ["belongings"] }, { fetchImpl }));
+    expect(fetchImpl).toHaveBeenCalledWith("/api/logistics", expect.objectContaining({ method: "POST" }));
+    expect(yields).toEqual([{ message: "When" }, { message: "When suits you?" }]);
   });
 
   it("follow-ups map errors the same way", async () => {

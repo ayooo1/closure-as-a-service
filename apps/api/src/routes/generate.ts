@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from "fastify";
 import {
   FeedbackSchema,
   GenerationSchema,
+  LogisticsRequestSchema,
+  LogisticsSchema,
   QuestionnaireSchema,
   RefinedSchema,
   RefineRequestSchema,
@@ -13,9 +15,11 @@ import { cacheKey, type GenerationCache } from "../lib/cache.js";
 import type { FeedbackStore } from "../lib/feedback.js";
 import type { TextGenerator } from "../lib/generator.js";
 import {
+  buildLogisticsPrompt,
   buildPrompt,
   buildRefinePrompt,
   buildRepliesPrompt,
+  LOGISTICS_SYSTEM_PROMPT,
   REFINE_SYSTEM_PROMPT,
   REPLIES_SYSTEM_PROMPT,
   SYSTEM_PROMPT,
@@ -96,6 +100,19 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { ge
       system: REPLIES_SYSTEM_PROMPT,
       prompt: buildRepliesPrompt(questionnaire, message),
       schema: RepliesSchema,
+    });
+  });
+
+  app.post("/logistics", ROUTE_OPTIONS, async (req, reply) => {
+    const parsed = LogisticsRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
+    const { questionnaire, topics, notes, safetyConcern } = parsed.data;
+
+    return streamStructured(req, reply, {
+      generate,
+      system: LOGISTICS_SYSTEM_PROMPT,
+      prompt: buildLogisticsPrompt(questionnaire, topics, notes, safetyConcern),
+      schema: LogisticsSchema,
     });
   });
 

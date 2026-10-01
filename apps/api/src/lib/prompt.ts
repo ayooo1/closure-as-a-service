@@ -6,6 +6,8 @@ import {
   VARIATION_COUNT,
   type Duration,
   type Ending,
+  LOGISTICS_TOPIC_LABELS,
+  type LogisticsTopic,
   type Medium,
   type Questionnaire,
   type Refinement,
@@ -142,4 +144,28 @@ ${SHARED_RULES}`;
 
 export function buildRepliesPrompt(q: Questionnaire, message: string): string {
   return ["The user is sending this message:", fence("message", message), "Context:", ...situation(q)].join("\n");
+}
+
+export const LOGISTICS_SYSTEM_PROMPT = `You help someone who has just ended a relationship or friendship write a short, practical follow-up about the shared things that still need sorting out.
+
+Rules:
+- Calm, neutral and businesslike in the requested tone; brief. This is about logistics, not feelings: do not revisit the ending or reopen any decision.
+- Cover each listed topic with one clear, fair next step. Never invent dates, times, places, amounts or items; invite them to suggest what works, or say what the user's notes say.
+- Make it easy to reply to, without inviting a wider conversation.
+- When the request says to avoid meeting, propose handovers that need no meeting: a trusted friend collecting or dropping off, a courier, or leaving items somewhere agreed. Never suggest meeting alone or sharing a location.
+${SHARED_RULES}`;
+
+export function buildLogisticsPrompt(
+  q: Questionnaire,
+  topics: readonly LogisticsTopic[],
+  notes: string | undefined,
+  safetyConcern: boolean,
+): string {
+  const lines = [
+    `Write the follow-up as ${MEDIUM_GUIDANCE[q.medium === "in-person" ? "text" : q.medium]}.`,
+    `Things to sort out: ${topics.map((t) => LOGISTICS_TOPIC_LABELS[t]).join("; ")}.`,
+  ];
+  if (safetyConcern) lines.push("Avoid meeting: arrange everything without the user meeting this person.");
+  if (notes) lines.push(fence("details", notes));
+  return [...lines, "Context:", ...situation(q).filter((l) => !l.startsWith("<details>"))].join("\n");
 }
