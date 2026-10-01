@@ -2,7 +2,7 @@
 # Build context: repository root  →  docker build -f apps/web/Dockerfile .
 
 # ---- deps: the web workspace only ----
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/app/apps/web/.next/cache \
     npm run build --workspace=@caas/web
 
 # ---- runner: Next.js standalone server only ----
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
