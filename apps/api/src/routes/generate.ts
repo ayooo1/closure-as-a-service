@@ -1,9 +1,24 @@
-import { Readable } from "node:stream";
 import type { FastifyPluginAsync } from "fastify";
-import { GenerationSchema, QuestionnaireSchema } from "@caas/shared";
+import {
+  GenerationSchema,
+  QuestionnaireSchema,
+  RefinedSchema,
+  RefineRequestSchema,
+  RepliesRequestSchema,
+  RepliesSchema,
+} from "@caas/shared";
+import type { z } from "zod";
 import { cacheKey, type GenerationCache } from "../lib/cache.js";
 import type { TextGenerator } from "../lib/generator.js";
-import { buildPrompt, SYSTEM_PROMPT } from "../lib/prompt.js";
+import {
+  buildPrompt,
+  buildRefinePrompt,
+  buildRepliesPrompt,
+  REFINE_SYSTEM_PROMPT,
+  REPLIES_SYSTEM_PROMPT,
+  SYSTEM_PROMPT,
+} from "../lib/prompt.js";
+import { streamStructured } from "../lib/stream-reply.js";
 
 export interface GenerateDeps {
   generate: TextGenerator;
@@ -12,79 +27,72 @@ export interface GenerateDeps {
   cache: GenerationCache;
 }
 
-function isValidGeneration(text: string): boolean {
-  try {
-    return GenerationSchema.safeParse(JSON.parse(text)).success;
-  } catch {
-    return false;
-  }
+// rateLimit: {} opts in with the plugin-level max/window (Redis-backed, shared across replicas).
+const ROUTE_OPTIONS = { bodyLimit: 8 * 1024, config: { rateLimit: {} } };
+
+function invalid(error: z.ZodError) {
+  return {
+    error: "invalid_request",
+    issues: error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+  };
 }
 
 export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { generate, modelId, cache }) => {
-  app.post(
-    "/generate",
-    // rateLimit: {} opts in with the plugin-level max/window (Redis-backed, shared across replicas).
-    { bodyLimit: 4 * 1024, config: { rateLimit: {} } },
-    async (req, reply) => {
-      const parsed = QuestionnaireSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return reply.code(400).send({
-          error: "invalid_request",
-          issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
-        });
-      }
-      const questionnaire = parsed.data;
-      const key = cacheKey(questionnaire, modelId);
+  // Every response body is the route's schema as JSON text: complete on a cache hit, otherwise
+  // streamed token by token. The client parses partial JSON as it arrives.
+  app.addHook("onSend", async (_req, reply) => {
+    reply.header("cache-control", "no-store");
+  });
 
-      // Body is the GenerationSchema object as JSON text, either complete (cache hit) or
-      // streamed token by token (miss); the client parses partial JSON as it arrives.
-      reply.header("cache-control", "no-store");
+  app.post("/generate", { ...ROUTE_OPTIONS, bodyLimit: 4 * 1024 }, async (req, reply) => {
+    const parsed = QuestionnaireSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
+    const questionnaire = parsed.data;
 
-      const cached = await cache.get(key);
-      if (cached) {
-        return reply.header("x-cache", "hit").type("text/plain; charset=utf-8").send(cached);
-      }
+    // Answers with a name or personal details are private and practically never repeat, so
+    // they are never cached: no benefit, and no reason to keep someone's story in Redis.
+    const cacheable = !questionnaire.name && !questionnaire.details;
+    const key = cacheKey(questionnaire, modelId);
 
-      // Stop paying for tokens nobody will read if the client disconnects mid-stream.
-      const abort = new AbortController();
-      reply.raw.on("close", () => {
-        if (!reply.raw.writableFinished) abort.abort();
-      });
+    const cached = cacheable ? await cache.get(key) : null;
+    if (cached) {
+      return reply.header("x-cache", "hit").type("text/plain; charset=utf-8").send(cached);
+    }
 
-      const tokens = generate({ system: SYSTEM_PROMPT, prompt: buildPrompt(questionnaire), signal: abort.signal });
+    reply.header("x-cache", cacheable ? "miss" : "skip");
+    return streamStructured(req, reply, {
+      generate,
+      system: SYSTEM_PROMPT,
+      prompt: buildPrompt(questionnaire),
+      schema: GenerationSchema,
+      onComplete: cacheable ? (text) => void cache.set(key, text) : undefined,
+    });
+  });
 
-      // Wait for the first token before committing to a 200, so an upstream failure
-      // (bad key, quota, outage) surfaces as a 502 instead of an empty success.
-      let first: IteratorResult<string, string | null>;
-      try {
-        first = await tokens.next();
-      } catch (err) {
-        req.log.error({ err }, "generation failed");
-        return reply.code(502).send({ error: "generation_failed" });
-      }
-      if (first.done) {
-        req.log.warn({ stopReason: first.value }, "generation produced no output");
-        return reply.code(502).send({ error: "generation_failed" });
-      }
+  // Follow-ups carry the chosen message (often with a name in it), so they're never cached.
+  app.post("/refine", ROUTE_OPTIONS, async (req, reply) => {
+    const parsed = RefineRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
+    const { questionnaire, message, refinement } = parsed.data;
 
-      // Mid-stream errors propagate and abort the response, so the client sees a failed
-      // request rather than a silently truncated success.
-      async function* relay(firstChunk: string) {
-        let text = firstChunk;
-        yield firstChunk;
-        let next = await tokens.next();
-        for (; !next.done; next = await tokens.next()) {
-          text += next.value;
-          yield next.value;
-        }
-        // Only complete, schema-valid generations are cached (not refusals or truncations).
-        if (next.value === "end_turn" && isValidGeneration(text)) {
-          void cache.set(key, text);
-        } else {
-          req.log.warn({ stopReason: next.value }, "generation incomplete or invalid; not cached");
-        }
-      }
-      return reply.header("x-cache", "miss").type("text/plain; charset=utf-8").send(Readable.from(relay(first.value)));
-    },
-  );
+    return streamStructured(req, reply, {
+      generate,
+      system: REFINE_SYSTEM_PROMPT,
+      prompt: buildRefinePrompt(questionnaire, message, refinement),
+      schema: RefinedSchema,
+    });
+  });
+
+  app.post("/replies", ROUTE_OPTIONS, async (req, reply) => {
+    const parsed = RepliesRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
+    const { questionnaire, message } = parsed.data;
+
+    return streamStructured(req, reply, {
+      generate,
+      system: REPLIES_SYSTEM_PROMPT,
+      prompt: buildRepliesPrompt(questionnaire, message),
+      schema: RepliesSchema,
+    });
+  });
 };

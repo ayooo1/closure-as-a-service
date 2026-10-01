@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { GenerationSchema, QuestionnaireSchema } from "./validations";
+import {
+  GenerationSchema,
+  QuestionnaireSchema,
+  RefineRequestSchema,
+  RepliesRequestSchema,
+  RepliesSchema,
+} from "./validations";
 
 const VALID = { duration: "6-12-months", reason: "need-space", tone: "gentle", medium: "email" };
 
@@ -40,12 +46,43 @@ describe("QuestionnaireSchema", () => {
 });
 
 describe("GenerationSchema", () => {
-  it("accepts variations with an angle and a message", () => {
-    const value = { variations: [{ angle: "Brief", message: "It's over." }] };
+  it("accepts a safety flag and variations with an angle and a message", () => {
+    const value = { safetyConcern: false, variations: [{ angle: "Brief", message: "It's over." }] };
     expect(GenerationSchema.parse(value)).toEqual(value);
   });
 
+  it("requires the safety flag", () => {
+    expect(GenerationSchema.safeParse({ variations: [] }).success).toBe(false);
+  });
+
   it("rejects variations missing a message", () => {
-    expect(GenerationSchema.safeParse({ variations: [{ angle: "Brief" }] }).success).toBe(false);
+    expect(GenerationSchema.safeParse({ safetyConcern: false, variations: [{ angle: "Brief" }] }).success).toBe(false);
+  });
+
+  it("lists safetyConcern first, so it streams before the messages", () => {
+    expect(Object.keys(GenerationSchema.shape)[0]).toBe("safetyConcern");
+  });
+});
+
+describe("follow-up requests", () => {
+  const message = "Sam, I'm ending things.";
+
+  it("refine: validates the nested questionnaire, trims the message and checks the refinement", () => {
+    const parsed = RefineRequestSchema.parse({ questionnaire: VALID, message: `  ${message} `, refinement: "softer" });
+    expect(parsed).toEqual({ questionnaire: VALID, message, refinement: "softer" });
+    expect(RefineRequestSchema.safeParse({ questionnaire: VALID, message, refinement: "meaner" }).success).toBe(false);
+  });
+
+  it("replies: requires a non-empty message of at most 2000 characters", () => {
+    expect(RepliesRequestSchema.safeParse({ questionnaire: VALID, message }).success).toBe(true);
+    expect(RepliesRequestSchema.safeParse({ questionnaire: VALID, message: "  " }).success).toBe(false);
+    expect(RepliesRequestSchema.safeParse({ questionnaire: VALID, message: "x".repeat(2001) }).success).toBe(false);
+    expect(RepliesRequestSchema.safeParse({ message }).success).toBe(false);
+  });
+
+  it("replies output pairs what they say with what you can say", () => {
+    const value = { replies: [{ theySay: "Why?", youCanSay: "We want different things." }] };
+    expect(RepliesSchema.parse(value)).toEqual(value);
+    expect(RepliesSchema.safeParse({ replies: [{ theySay: "Why?" }] }).success).toBe(false);
   });
 });

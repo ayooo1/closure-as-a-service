@@ -1,9 +1,22 @@
 import { Allow, parse } from "partial-json";
-import type { Generation, QuestionnaireInput } from "@caas/shared";
+import type {
+  Generation,
+  QuestionnaireInput,
+  RefineRequest,
+  Refined,
+  Replies,
+  RepliesRequest,
+} from "@caas/shared";
 
 export type Variation = Generation["variations"][number];
 /** A variation as it streams in: fields appear (and grow) as the model writes them. */
 export type PartialVariation = Partial<Variation>;
+export interface PartialGeneration {
+  /** Arrives first; undefined until the model has written it. */
+  safetyConcern?: boolean;
+  variations: PartialVariation[];
+}
+export type PartialReply = Partial<Replies["replies"][number]>;
 
 export type GenerationErrorKind = "rate_limited" | "invalid" | "failed" | "network";
 
@@ -19,16 +32,9 @@ export class GenerationError extends Error {
   }
 }
 
-function toVariations(text: string): PartialVariation[] {
-  let value: unknown;
-  try {
-    value = parse(text, Allow.ALL);
-  } catch {
-    return []; // not enough text yet to say anything
-  }
-  const variations = (value as { variations?: unknown } | null)?.variations;
-  if (!Array.isArray(variations)) return [];
-  return variations.filter((v): v is PartialVariation => typeof v === "object" && v !== null);
+export interface StreamOptions {
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
 }
 
 async function errorFor(res: Response): Promise<GenerationError> {
@@ -39,24 +45,38 @@ async function errorFor(res: Response): Promise<GenerationError> {
   if (res.status === 400 || res.status === 413) {
     return new GenerationError("invalid", "Some answers weren't valid. Please check them and try again.");
   }
-  return new GenerationError("failed", "We couldn't write your messages right now. Please try again.");
+  return new GenerationError("failed", "We couldn't write that right now. Please try again.");
 }
 
+function parsePartial(text: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = parse(text, Allow.ALL);
+    return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null; // not enough text yet to say anything
+  }
+}
+
+const objectsIn = (value: unknown) =>
+  Array.isArray(value) ? value.filter((v): v is Record<string, unknown> => typeof v === "object" && v !== null) : [];
+
 /**
- * POSTs the questionnaire and yields the variations parsed so far after every chunk.
- * The last yield is the complete result. Throws GenerationError on failure; an abort
- * via `signal` ends quietly with an AbortError like any fetch.
+ * POSTs `body` as JSON and yields the response parsed so far (as partial JSON) after every
+ * chunk; the last yield is the complete result. Throws GenerationError on failure; an abort
+ * via `signal` rethrows the AbortError like any fetch.
  */
-export async function* streamGeneration(
-  input: QuestionnaireInput,
-  { signal, fetchImpl = fetch }: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
-): AsyncGenerator<PartialVariation[]> {
+async function* streamJson<T>(
+  url: string,
+  body: unknown,
+  shape: (partial: Record<string, unknown> | null) => T,
+  { signal, fetchImpl = fetch }: StreamOptions = {},
+): AsyncGenerator<T> {
   let res: Response;
   try {
-    res = await fetchImpl("/api/generate", {
+    res = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify(body),
       signal,
     });
   } catch (err) {
@@ -72,7 +92,7 @@ export async function* streamGeneration(
       const { done, value } = await reader.read();
       if (done) break;
       text += value;
-      yield toVariations(text);
+      yield shape(parsePartial(text));
     }
   } catch (err) {
     if (signal?.aborted) throw err;
@@ -83,8 +103,28 @@ export async function* streamGeneration(
   try {
     JSON.parse(text);
   } catch {
-    throw new GenerationError("failed", "The messages came back incomplete. Please try again.");
+    throw new GenerationError("failed", "The response came back incomplete. Please try again.");
   }
+}
+
+export function streamGeneration(input: QuestionnaireInput, opts?: StreamOptions): AsyncGenerator<PartialGeneration> {
+  return streamJson(
+    "/api/generate",
+    input,
+    (p) => ({
+      safetyConcern: typeof p?.safetyConcern === "boolean" ? p.safetyConcern : undefined,
+      variations: objectsIn(p?.variations),
+    }),
+    opts,
+  );
+}
+
+export function streamRefine(input: RefineRequest, opts?: StreamOptions): AsyncGenerator<Partial<Refined>> {
+  return streamJson("/api/refine", input, (p) => (typeof p?.message === "string" ? { message: p.message } : {}), opts);
+}
+
+export function streamReplies(input: RepliesRequest, opts?: StreamOptions): AsyncGenerator<PartialReply[]> {
+  return streamJson("/api/replies", input, (p) => objectsIn(p?.replies) as PartialReply[], opts);
 }
 
 /** iOS and Android both accept `sms:?&body=`; there's no recipient, the user picks one. */

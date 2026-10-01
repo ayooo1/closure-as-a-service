@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClosureApp } from "./closure-app";
 
 const GENERATION = {
+  safetyConcern: false,
   variations: [
     { angle: "Short and kind", message: "Sam, I've decided to end things between us." },
     { angle: "With a reason", message: "Sam, we want different futures, so I'm ending our relationship." },
@@ -11,6 +12,13 @@ const GENERATION = {
   ],
 };
 const FULL = JSON.stringify(GENERATION);
+const REFINED = "Sam, I'm ending things.";
+const REPLIES = {
+  replies: [
+    { theySay: "Can we talk about this?", youCanSay: "I've thought it through, and my decision is final." },
+    { theySay: "Why?", youCanSay: "We want different things. I'm sorry." },
+  ],
+};
 
 /** A response whose body the test feeds chunk by chunk. */
 function controlledResponse() {
@@ -24,6 +32,14 @@ function controlledResponse() {
 }
 
 const fetchMock = vi.fn<typeof fetch>();
+/** Answers each API route with a fixed body (status 200) unless a test overrides it. */
+function fakeApi(routes: Partial<Record<"/api/generate" | "/api/refine" | "/api/replies", string | Response>> = {}) {
+  const bodies = { "/api/generate": FULL, "/api/refine": JSON.stringify({ message: REFINED }), "/api/replies": JSON.stringify(REPLIES), ...routes };
+  fetchMock.mockImplementation((url) => {
+    const body = bodies[url as keyof typeof bodies];
+    return Promise.resolve(body instanceof Response ? body : new Response(body));
+  });
+}
 beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
@@ -40,7 +56,15 @@ async function completeWizard(user: ReturnType<typeof userEvent.setup>, medium =
   await user.click(screen.getByRole("button", { name: /write my messages/i }));
 }
 
-const sentBodies = () => fetchMock.mock.calls.map(([, init]) => JSON.parse(init!.body as string) as Record<string, string>);
+const requests = (url: string) =>
+  fetchMock.mock.calls
+    .filter(([u]) => u === url)
+    .map(([, init]) => JSON.parse(init!.body as string) as Record<string, unknown>);
+
+async function resultCards() {
+  await screen.findByRole("heading", { name: "Your messages" });
+  return screen.getAllByRole("article");
+}
 
 describe("ClosureApp", () => {
   it("walks through the wizard, streams three cards, then offers actions", async () => {
@@ -50,7 +74,7 @@ describe("ClosureApp", () => {
     render(<ClosureApp />);
 
     await completeWizard(user);
-    expect(sentBodies()[0]).toEqual({
+    expect(requests("/api/generate")[0]).toEqual({
       duration: "1-3-years",
       reason: "different-goals",
       tone: "warm",
@@ -59,20 +83,19 @@ describe("ClosureApp", () => {
     });
 
     // Mid-stream: partial text is visible, three card slots are reserved, no actions yet.
-    stream.push(FULL.slice(0, 80));
+    stream.push(FULL.slice(0, 100));
     expect(await screen.findByText(/Sam, I've decided/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /writing your messages/i })).toBeInTheDocument();
     expect(screen.getAllByRole("article")).toHaveLength(3);
     expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
 
-    stream.push(FULL.slice(80));
+    stream.push(FULL.slice(100));
     stream.end();
-    expect(await screen.findByRole("heading", { name: "Your messages" })).toBeInTheDocument();
-
-    const cards = screen.getAllByRole("article");
+    const cards = await resultCards();
     expect(cards).toHaveLength(3);
     expect(within(cards[1]!).getByText("With a reason")).toBeInTheDocument();
     expect(within(cards[1]!).getByText(GENERATION.variations[1]!.message)).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: /safety/i })).not.toBeInTheDocument();
 
     await user.click(within(cards[0]!).getByRole("button", { name: "Copy" }));
     expect(await navigator.clipboard.readText()).toBe(GENERATION.variations[0]!.message);
@@ -84,16 +107,25 @@ describe("ClosureApp", () => {
     );
   });
 
+  it("tells the user their name and details aren't saved", async () => {
+    const user = userEvent.setup();
+    render(<ClosureApp />);
+    for (const label of ["1–3 years", "We want different things", "Warm", "Text message"]) {
+      await user.click(await screen.findByLabelText(label));
+    }
+    expect(await screen.findByText(/we don't save your name or details/i)).toBeInTheDocument();
+  });
+
   it("regenerates with a different tone, keeping the other answers", async () => {
     const user = userEvent.setup();
-    fetchMock.mockImplementation(() => Promise.resolve(new Response(FULL)));
+    fakeApi();
     render(<ClosureApp />);
 
     await completeWizard(user);
     await user.click(await screen.findByRole("button", { name: "Direct" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(sentBodies()[1]).toEqual({ ...sentBodies()[0], tone: "direct" });
+    await waitFor(() => expect(requests("/api/generate")).toHaveLength(2));
+    expect(requests("/api/generate")[1]).toEqual({ ...requests("/api/generate")[0], tone: "direct" });
     // The current tone isn't offered as a tweak.
     expect(await screen.findByRole("button", { name: "Warm" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Direct" })).not.toBeInTheDocument();
@@ -101,7 +133,7 @@ describe("ClosureApp", () => {
 
   it("offers an email link for emails and no send link for in-person", async () => {
     const user = userEvent.setup();
-    fetchMock.mockImplementation(() => Promise.resolve(new Response(FULL)));
+    fakeApi();
     const { unmount } = render(<ClosureApp />);
 
     await completeWizard(user, "Email");
@@ -113,7 +145,7 @@ describe("ClosureApp", () => {
 
     render(<ClosureApp />);
     await completeWizard(user, "In person (talking points)");
-    await screen.findByRole("heading", { name: "Your messages" });
+    await resultCards();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
@@ -149,7 +181,7 @@ describe("ClosureApp", () => {
     render(<ClosureApp />);
 
     await completeWizard(user);
-    stream.push(FULL.slice(0, 80));
+    stream.push(FULL.slice(0, 100));
     await screen.findByText(/Sam, I've decided/);
     await user.click(screen.getByRole("button", { name: "Stop" }));
 
@@ -159,7 +191,7 @@ describe("ClosureApp", () => {
 
   it("starts over with the previous answers still selected", async () => {
     const user = userEvent.setup();
-    fetchMock.mockResolvedValue(new Response(FULL));
+    fakeApi();
     render(<ClosureApp />);
 
     await completeWizard(user);
@@ -180,5 +212,124 @@ describe("ClosureApp", () => {
 
     expect(await screen.findByLabelText("6–12 months")).toBeChecked();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+  });
+});
+
+describe("safety", () => {
+  it("shows safety guidance and helplines, and hides reply coaching", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "/api/generate": JSON.stringify({ ...GENERATION, safetyConcern: true }) });
+    render(<ClosureApp />);
+
+    await completeWizard(user);
+    await resultCards();
+    const notice = screen.getByRole("complementary", { name: /your safety comes first/i });
+    expect(within(notice).getByText(/call your local emergency number/i)).toBeInTheDocument();
+    expect(within(notice).getByRole("link", { name: "findahelpline.com" })).toHaveAttribute("href", "https://findahelpline.com");
+    expect(screen.queryByRole("button", { name: /what if they reply/i })).not.toBeInTheDocument();
+  });
+
+  it("turns in-person talking points into messages to send from a safe place", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "/api/generate": JSON.stringify({ ...GENERATION, safetyConcern: true }) });
+    render(<ClosureApp />);
+
+    await completeWizard(user, "In person (talking points)");
+    const cards = await resultCards();
+    expect(within(cards[0]!).getByRole("link", { name: /open in messages/i })).toBeInTheDocument();
+  });
+});
+
+describe("refining one message", () => {
+  it("edits a message by hand; copy uses the edit and undo restores the original", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+
+    await user.click(within(card).getByRole("button", { name: "Edit" }));
+    const editor = within(card).getByRole("textbox", { name: "Edit message" });
+    await user.clear(editor);
+    await user.type(editor, "Sam, this is goodbye.");
+    await user.click(within(card).getByRole("button", { name: "Done" }));
+
+    expect(within(card).getByText("Sam, this is goodbye.")).toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "Copy" }));
+    expect(await navigator.clipboard.readText()).toBe("Sam, this is goodbye.");
+
+    await user.click(within(card).getByRole("button", { name: "Undo" }));
+    expect(within(card).getByText(GENERATION.variations[0]!.message)).toBeInTheDocument();
+  });
+
+  it("rewrites a message with Claude, sending the current text and the chosen change", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[1]!;
+
+    await user.click(within(card).getByRole("button", { name: "Rewrite" }));
+    await user.click(within(card).getByRole("button", { name: "Without the reason" }));
+
+    expect(await within(card).findByText(REFINED)).toBeInTheDocument();
+    expect(requests("/api/refine")[0]).toMatchObject({
+      message: GENERATION.variations[1]!.message,
+      refinement: "without-reason",
+      questionnaire: { tone: "warm", name: "Sam" },
+    });
+    // The other cards are untouched.
+    expect(screen.getByText(GENERATION.variations[0]!.message)).toBeInTheDocument();
+
+    await user.click(within(card).getByRole("button", { name: "Undo" }));
+    expect(within(card).getByText(GENERATION.variations[1]!.message)).toBeInTheDocument();
+  });
+
+  it("keeps the original message if a rewrite fails", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "/api/refine": new Response("{}", { status: 502 }) });
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+
+    await user.click(within(card).getByRole("button", { name: "Rewrite" }));
+    await user.click(within(card).getByRole("button", { name: "Shorter" }));
+
+    expect(await within(card).findByRole("alert")).toHaveTextContent(/couldn't write that/i);
+    expect(within(card).getByText(GENERATION.variations[0]!.message)).toBeInTheDocument();
+  });
+});
+
+describe("what if they reply", () => {
+  it("shows likely replies with calm responses for the chosen message", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[2]!;
+
+    await user.click(within(card).getByRole("button", { name: /what if they reply/i }));
+
+    expect(await within(card).findByText("Can we talk about this?")).toBeInTheDocument();
+    expect(within(card).getByText(REPLIES.replies[0]!.youCanSay)).toBeInTheDocument();
+    expect(within(card).getByText(REPLIES.replies[1]!.youCanSay)).toBeInTheDocument();
+    expect(requests("/api/replies")[0]).toMatchObject({ message: GENERATION.variations[2]!.message });
+  });
+
+  it("clears reply suggestions when the message is rewritten", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+
+    await user.click(within(card).getByRole("button", { name: /what if they reply/i }));
+    await within(card).findByText("Can we talk about this?");
+    await user.click(within(card).getByRole("button", { name: "Rewrite" }));
+    await user.click(within(card).getByRole("button", { name: "Shorter" }));
+
+    await within(card).findByText(REFINED);
+    expect(within(card).queryByText("Can we talk about this?")).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /what if they reply/i })).toBeInTheDocument();
   });
 });
