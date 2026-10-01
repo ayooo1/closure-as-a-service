@@ -11,7 +11,7 @@ export function streamingGenerator(text: string, { parts = 4, delayMs = 0, stopR
       if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
       yield chunk;
     }
-    return stopReason;
+    return { stopReason, usage: { inputTokens: 100, outputTokens: text.length } };
   };
   return Object.assign(generate, { calls });
 }

@@ -6,16 +6,21 @@ const q = QuestionnaireSchema.parse({ duration: "few-dates", reason: "other", to
 
 describe("cacheKey", () => {
   it("is stable, namespaced and short", () => {
-    const key = cacheKey(q, "claude-haiku-4-5:default");
-    expect(key).toBe(cacheKey({ ...q }, "claude-haiku-4-5:default"));
+    const key = cacheKey("gen", q, "claude-haiku-4-5:default");
+    expect(key).toBe(cacheKey("gen", { ...q }, "claude-haiku-4-5:default"));
     expect(key).toMatch(/^caas:gen:[\w-]{43}$/);
   });
 
   it("differs by model and by any answer", () => {
-    const key = cacheKey(q, "claude-haiku-4-5:default");
-    expect(cacheKey(q, "claude-opus-5-5:default")).not.toBe(key);
-    expect(cacheKey({ ...q, tone: "direct" }, "claude-haiku-4-5:default")).not.toBe(key);
-    expect(cacheKey({ ...q, details: "x" }, "claude-haiku-4-5:default")).not.toBe(key);
+    const key = cacheKey("gen", q, "claude-haiku-4-5:default");
+    expect(cacheKey("gen", q, "claude-opus-5-5:default")).not.toBe(key);
+    expect(cacheKey("gen", { ...q, tone: "direct" }, "claude-haiku-4-5:default")).not.toBe(key);
+    expect(cacheKey("gen", { ...q, details: "x" }, "claude-haiku-4-5:default")).not.toBe(key);
+  });
+
+  it("keeps kinds of output apart", () => {
+    expect(cacheKey("replies", q, "m")).toMatch(/^caas:replies:/);
+    expect(cacheKey("replies", q, "m").slice(-43)).toBe(cacheKey("gen", q, "m").slice(-43));
   });
 });
 

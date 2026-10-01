@@ -7,13 +7,14 @@ import {
   PracticeReplySchema,
   PracticeRequestSchema,
   QuestionnaireSchema,
+  type Questionnaire,
   RefinedSchema,
   RefineRequestSchema,
   RepliesRequestSchema,
   RepliesSchema,
 } from "@caas/shared";
 import type { z } from "zod";
-import { cacheKey, type GenerationCache } from "../lib/cache.js";
+import { cacheKey, type CacheKind, type GenerationCache } from "../lib/cache.js";
 import type { FeedbackStore } from "../lib/feedback.js";
 import type { TextGenerator } from "../lib/generator.js";
 import {
@@ -48,6 +49,10 @@ function invalid(error: z.ZodError) {
   };
 }
 
+// Answers with a name or personal details are private and practically never repeat, so nothing
+// derived from them is cached: no benefit, and no reason to keep someone's story in Redis.
+const isPrivate = (q: Questionnaire) => Boolean(q.name || q.details);
+
 export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { generate, modelId, cache, feedback }) => {
   // Every response body is the route's schema as JSON text: complete on a cache hit, otherwise
   // streamed token by token. The client parses partial JSON as it arrives.
@@ -55,39 +60,64 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { ge
     reply.header("cache-control", "no-store");
   });
 
+  /**
+   * Serves a cached result for `cache` (a key) when there is one; otherwise streams a fresh one
+   * and caches it if it completes. A null key means the request is never cached.
+   */
+  async function respond(
+    req: Parameters<typeof streamStructured>[0],
+    reply: Parameters<typeof streamStructured>[1],
+    key: string | null,
+    opts: { system: string; prompt: string; schema: z.ZodType },
+  ) {
+    const cached = key ? await cache.get(key) : null;
+    if (cached) return reply.header("x-cache", "hit").type("text/plain; charset=utf-8").send(cached);
+
+    reply.header("x-cache", key ? "miss" : "skip");
+    return streamStructured(req, reply, {
+      generate,
+      ...opts,
+      onComplete: key ? (text) => void cache.set(key, text) : undefined,
+    });
+  }
+
+  const keyFor = (kind: CacheKind, input: unknown) => cacheKey(kind, input, modelId);
+
+  /**
+   * Follow-ups carry a message the user may have edited (often adding a name), so they're cached
+   * only when the message is word for word one we wrote for these anonymous answers: then the
+   * request holds nothing personal, and everyone who picks that message gets an instant result.
+   */
+  async function followUpKey(kind: CacheKind, q: Questionnaire, message: string, input: unknown) {
+    if (isPrivate(q)) return null;
+    const generation = await cache.get(keyFor("gen", q));
+    if (!generation) return null;
+    try {
+      const { variations } = GenerationSchema.parse(JSON.parse(generation));
+      return variations.some((v) => v.message === message) ? keyFor(kind, input) : null;
+    } catch {
+      return null;
+    }
+  }
+
   app.post("/generate", { ...ROUTE_OPTIONS, bodyLimit: 4 * 1024 }, async (req, reply) => {
     const parsed = QuestionnaireSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
-    const questionnaire = parsed.data;
+    const q = parsed.data;
 
-    // Answers with a name or personal details are private and practically never repeat, so
-    // they are never cached: no benefit, and no reason to keep someone's story in Redis.
-    const cacheable = !questionnaire.name && !questionnaire.details;
-    const key = cacheKey(questionnaire, modelId);
-
-    const cached = cacheable ? await cache.get(key) : null;
-    if (cached) {
-      return reply.header("x-cache", "hit").type("text/plain; charset=utf-8").send(cached);
-    }
-
-    reply.header("x-cache", cacheable ? "miss" : "skip");
-    return streamStructured(req, reply, {
-      generate,
+    return respond(req, reply, isPrivate(q) ? null : keyFor("gen", q), {
       system: SYSTEM_PROMPT,
-      prompt: buildPrompt(questionnaire),
+      prompt: buildPrompt(q),
       schema: GenerationSchema,
-      onComplete: cacheable ? (text) => void cache.set(key, text) : undefined,
     });
   });
 
-  // Follow-ups carry the chosen message (often with a name in it), so they're never cached.
   app.post("/refine", ROUTE_OPTIONS, async (req, reply) => {
     const parsed = RefineRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
     const { questionnaire, message, refinement } = parsed.data;
 
-    return streamStructured(req, reply, {
-      generate,
+    return respond(req, reply, await followUpKey("refine", questionnaire, message, parsed.data), {
       system: REFINE_SYSTEM_PROMPT,
       prompt: buildRefinePrompt(questionnaire, message, refinement),
       schema: RefinedSchema,
@@ -99,21 +129,20 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { ge
     if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
     const { questionnaire, message } = parsed.data;
 
-    return streamStructured(req, reply, {
-      generate,
+    return respond(req, reply, await followUpKey("replies", questionnaire, message, parsed.data), {
       system: REPLIES_SYSTEM_PROMPT,
       prompt: buildRepliesPrompt(questionnaire, message),
       schema: RepliesSchema,
     });
   });
 
+  // Notes are free text, so only note-free requests from anonymous answers are cached.
   app.post("/logistics", ROUTE_OPTIONS, async (req, reply) => {
     const parsed = LogisticsRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
     const { questionnaire, topics, notes, safetyConcern } = parsed.data;
 
-    return streamStructured(req, reply, {
-      generate,
+    return respond(req, reply, isPrivate(questionnaire) || notes ? null : keyFor("logistics", parsed.data), {
       system: LOGISTICS_SYSTEM_PROMPT,
       prompt: buildLogisticsPrompt(questionnaire, topics, notes, safetyConcern),
       schema: LogisticsSchema,
@@ -121,13 +150,14 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { ge
   });
 
   // Up to 16 turns of 1000 characters plus the opening message; 40 KB leaves room for multi-byte text.
+  // Only the opening reaction can be cached: after that, the transcript holds the user's own words.
   app.post("/practice", { ...ROUTE_OPTIONS, bodyLimit: 40 * 1024 }, async (req, reply) => {
     const parsed = PracticeRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
     const { questionnaire, message, turns } = parsed.data;
 
-    return streamStructured(req, reply, {
-      generate,
+    const key = turns.length === 0 ? await followUpKey("practice", questionnaire, message, parsed.data) : null;
+    return respond(req, reply, key, {
       system: PRACTICE_SYSTEM_PROMPT,
       prompt: buildPracticePrompt(questionnaire, message, turns),
       schema: PracticeReplySchema,

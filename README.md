@@ -24,7 +24,9 @@ This project is also a **full-stack and cloud-native showcase**: a Next.js front
 - **Safety check**: if the details suggest the user may be at risk, messages become short and final, and the page shows safety guidance and helplines
 - **Privacy by default**: answers that include a name or personal details are never cached or stored; practice conversations aren't stored
 - **Redis-backed rate limiting**: per-IP limits shared across every API replica
-- **Prompt result caching**: identical answers without personal text are served from Redis
+- **Result caching**: identical answers without personal text are served from Redis in milliseconds, and so are
+  follow-ups (rewrites, likely replies, the opening practice reply, note-free logistics) on a message we wrote for them
+- **Usage logging**: every model call logs its time to first token, total time and token counts
 - **Production Kubernetes setup**: Deployments, Services, ConfigMap/Secret, Ingress and HPA
 
 ## 🏗️ Architecture
@@ -145,7 +147,9 @@ details, so they're never cached).
 
 `ending` is optional and defaults to `relationship`; each ending accepts its own set of reasons.
 
-Follow-ups on one chosen message (rate limited the same way, never cached):
+Follow-ups on one chosen message (rate limited the same way). They're cached only when they hold nothing personal:
+the answers have no name or details, and the message is word for word one of the cached variations (so not edited).
+Practice is cached for its opening reply only, and logistics only without `notes`.
 
 | Endpoint | Body | Streams |
 | --- | --- | --- |
@@ -169,7 +173,7 @@ and returns 204. It records counts per day in Redis and never any text; see `scr
 
 | `AI_MODEL` | Use it for |
 | --- | --- |
-| `claude-haiku-4-5` (default) | Fast, low-cost generations (~2.5s to first token, ~6s total) |
+| `claude-haiku-4-5` (default) | Fast, low-cost generations (~1-1.5s to first token; ~2s for a rewrite, ~7s for three emails) |
 | `claude-opus-5-5` | The most thoughtful writing (~2-3s to first token, ~8s total, ~4x the cost). Gets server-side refusal fallbacks automatically; set `AI_EFFORT` to tune depth |
 
 Set it in [`k8s/configmap.yaml`](k8s/configmap.yaml) (or `.env` locally). The response cache is keyed per model, so switching never serves the other model's output.

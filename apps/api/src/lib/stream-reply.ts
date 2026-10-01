@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
-import type { TextGenerator } from "./generator.js";
+import type { GenerationOutcome, TextGenerator } from "./generator.js";
 
 function isValid(schema: z.ZodType, text: string): boolean {
   try {
@@ -21,6 +21,7 @@ function isValid(schema: z.ZodType, text: string): boolean {
  *   not a silently truncated success.
  * - Calls onComplete only for output that finished normally and matches the schema
  *   (never for refusals, truncation or malformed JSON).
+ * - Logs one line per finished generation with its latency and token usage, for cost and speed tracking.
  */
 export async function streamStructured(
   req: FastifyRequest,
@@ -38,9 +39,10 @@ export async function streamStructured(
     if (!reply.raw.writableFinished) abort.abort();
   });
 
+  const started = performance.now();
   const tokens = opts.generate({ system: opts.system, prompt: opts.prompt, schema: opts.schema, signal: abort.signal });
 
-  let first: IteratorResult<string, string | null>;
+  let first: IteratorResult<string, GenerationOutcome>;
   try {
     first = await tokens.next();
   } catch (err) {
@@ -48,9 +50,11 @@ export async function streamStructured(
     return reply.code(502).send({ error: "generation_failed" });
   }
   if (first.done) {
-    req.log.warn({ stopReason: first.value }, "generation produced no output");
+    req.log.warn({ stopReason: first.value.stopReason }, "generation produced no output");
     return reply.code(502).send({ error: "generation_failed" });
   }
+
+  const firstTokenMs = Math.round(performance.now() - started);
 
   async function* relay(firstChunk: string) {
     let text = firstChunk;
@@ -60,11 +64,13 @@ export async function streamStructured(
       text += next.value;
       yield next.value;
     }
-    if (next.value === "end_turn" && isValid(opts.schema, text)) {
-      opts.onComplete?.(text);
-    } else {
-      req.log.warn({ stopReason: next.value }, "generation incomplete or invalid");
-    }
+    const { stopReason, usage } = next.value;
+    const ok = stopReason === "end_turn" && isValid(opts.schema, text);
+    req.log[ok ? "info" : "warn"](
+      { url: req.url, stopReason, firstTokenMs, totalMs: Math.round(performance.now() - started), ...usage },
+      ok ? "generation finished" : "generation incomplete or invalid",
+    );
+    if (ok) opts.onComplete?.(text);
   }
   return reply.type("text/plain; charset=utf-8").send(Readable.from(relay(first.value)));
 }
