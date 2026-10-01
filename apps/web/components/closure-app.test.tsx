@@ -14,6 +14,18 @@ const GENERATION = {
 const FULL = JSON.stringify(GENERATION);
 const REFINED = "Sam, I'm ending things.";
 const LOGISTICS = "Could you let me know a time that works for you to collect your things?";
+
+/** The other person's lines in a practice conversation, by how many replies the user has made. */
+function practiceScript(lines = ["Wait... where is this coming from?", "I guess I saw it coming.", "Okay. Take care."]) {
+  return (body: Record<string, unknown>) => {
+    const replies = (body.turns as { role: string }[]).filter((t) => t.role === "you").length;
+    return JSON.stringify({
+      theySay: lines[Math.min(replies, lines.length - 1)],
+      coachTip: replies === 0 ? "" : `Tip ${replies}: you stayed calm.`,
+      conversationOver: replies >= lines.length - 1,
+    });
+  };
+}
 const REPLIES = {
   replies: [
     { theySay: "Can we talk about this?", youCanSay: "I've thought it through, and my decision is final." },
@@ -34,19 +46,23 @@ function controlledResponse() {
 
 const fetchMock = vi.fn<typeof fetch>();
 /** Answers each API route with a fixed body (status 200) unless a test overrides it. */
-type Route = "/api/generate" | "/api/refine" | "/api/replies" | "/api/feedback" | "/api/logistics";
-function fakeApi(routes: Partial<Record<Route, string | Response>> = {}) {
+type Route = "/api/generate" | "/api/refine" | "/api/replies" | "/api/feedback" | "/api/logistics" | "/api/practice";
+type Reply = string | Response | ((body: Record<string, unknown>) => string);
+function fakeApi(routes: Partial<Record<Route, Reply>> = {}) {
   const bodies = {
     "/api/generate": FULL,
     "/api/refine": JSON.stringify({ message: REFINED }),
     "/api/replies": JSON.stringify(REPLIES),
     "/api/feedback": "",
     "/api/logistics": JSON.stringify({ message: LOGISTICS }),
+    "/api/practice": practiceScript(),
     ...routes,
-  };
-  fetchMock.mockImplementation((url) => {
-    const body = bodies[url as keyof typeof bodies];
-    return Promise.resolve(body instanceof Response ? body : new Response(body));
+  } as Record<Route, Reply>;
+  fetchMock.mockImplementation((url, init) => {
+    const reply = bodies[url as Route];
+    if (reply instanceof Response) return Promise.resolve(reply);
+    const body = typeof reply === "function" ? reply(JSON.parse(init!.body as string) as Record<string, unknown>) : reply;
+    return Promise.resolve(new Response(body));
   });
 }
 beforeEach(() => {
@@ -507,5 +523,90 @@ describe("logistics", () => {
 
     await resultCards();
     expect(screen.queryByRole("button", { name: /sort out belongings/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("practice conversation", () => {
+  async function openPractice(user: ReturnType<typeof userEvent.setup>) {
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+    await user.click(within(card).getByRole("button", { name: /practise the conversation/i }));
+    return within(card).getByRole("region", { name: "Practice conversation" });
+  }
+
+  it("opens with their reaction to the chosen message", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    const panel = await openPractice(user);
+
+    expect(await within(panel).findByText("Wait... where is this coming from?")).toBeInTheDocument();
+    expect(within(panel).getByText(GENERATION.variations[0]!.message)).toBeInTheDocument(); // the opener, as your bubble
+    expect(requests("/api/practice")[0]).toMatchObject({ message: GENERATION.variations[0]!.message, turns: [] });
+    expect(within(panel).getByText("0 / 8 replies")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Send reply" })).toBeDisabled();
+  });
+
+  it("sends the whole conversation each turn and shows a coaching tip under your reply", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    const panel = await openPractice(user);
+    await within(panel).findByText("Wait... where is this coming from?");
+
+    await user.type(within(panel).getByLabelText("Your reply"), "I've thought about it for a while.");
+    await user.click(within(panel).getByRole("button", { name: "Send reply" }));
+
+    expect(await within(panel).findByText("I guess I saw it coming.")).toBeInTheDocument();
+    expect(within(panel).getByText("Tip 1: you stayed calm.")).toBeInTheDocument();
+    expect(requests("/api/practice")[1]!.turns).toEqual([
+      { role: "them", text: "Wait... where is this coming from?" },
+      { role: "you", text: "I've thought about it for a while." },
+    ]);
+    expect(within(panel).getByText("1 / 8 replies")).toBeInTheDocument();
+    expect(within(panel).getByLabelText("Your reply")).toHaveValue("");
+  });
+
+  it("finishes when the conversation closes, and can start again", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "/api/practice": practiceScript(["Why?", "Okay. I understand."]) });
+    render(<ClosureApp />);
+    const panel = await openPractice(user);
+    await within(panel).findByText("Why?");
+
+    await user.type(within(panel).getByLabelText("Your reply"), "It's my decision.");
+    await user.click(within(panel).getByRole("button", { name: "Send reply" }));
+
+    expect(await within(panel).findByText(/practice finished/i)).toBeInTheDocument();
+    expect(within(panel).queryByLabelText("Your reply")).not.toBeInTheDocument();
+
+    await user.click(within(panel).getByRole("button", { name: /practise again/i }));
+    await waitFor(() => expect(requests("/api/practice").at(-1)).toMatchObject({ turns: [] }));
+    expect(await within(panel).findByText("0 / 8 replies")).toBeInTheDocument();
+  });
+
+  it("locks editing and rewriting while practising, and ends on request", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    const panel = await openPractice(user);
+    await within(panel).findByText("Wait... where is this coming from?");
+    const card = screen.getAllByRole("article")[0]!;
+
+    expect(within(card).getByRole("button", { name: "Edit" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: "Rewrite" })).toBeDisabled();
+    await user.click(within(panel).getByRole("button", { name: "End" }));
+
+    expect(within(card).queryByRole("region", { name: "Practice conversation" })).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Edit" })).toBeEnabled();
+  });
+
+  it("isn't offered when there's a safety concern", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "/api/generate": JSON.stringify({ ...GENERATION, safetyConcern: true }) });
+    render(<ClosureApp />);
+    await completeWizard(user);
+    await resultCards();
+    expect(screen.queryByRole("button", { name: /practise the conversation/i })).not.toBeInTheDocument();
   });
 });

@@ -4,6 +4,8 @@ import {
   GenerationSchema,
   LogisticsRequestSchema,
   LogisticsSchema,
+  PracticeReplySchema,
+  PracticeRequestSchema,
   QuestionnaireSchema,
   RefinedSchema,
   RefineRequestSchema,
@@ -16,10 +18,12 @@ import type { FeedbackStore } from "../lib/feedback.js";
 import type { TextGenerator } from "../lib/generator.js";
 import {
   buildLogisticsPrompt,
+  buildPracticePrompt,
   buildPrompt,
   buildRefinePrompt,
   buildRepliesPrompt,
   LOGISTICS_SYSTEM_PROMPT,
+  PRACTICE_SYSTEM_PROMPT,
   REFINE_SYSTEM_PROMPT,
   REPLIES_SYSTEM_PROMPT,
   SYSTEM_PROMPT,
@@ -113,6 +117,20 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { ge
       system: LOGISTICS_SYSTEM_PROMPT,
       prompt: buildLogisticsPrompt(questionnaire, topics, notes, safetyConcern),
       schema: LogisticsSchema,
+    });
+  });
+
+  // Up to 16 turns of 1000 characters plus the opening message; 40 KB leaves room for multi-byte text.
+  app.post("/practice", { ...ROUTE_OPTIONS, bodyLimit: 40 * 1024 }, async (req, reply) => {
+    const parsed = PracticeRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
+    const { questionnaire, message, turns } = parsed.data;
+
+    return streamStructured(req, reply, {
+      generate,
+      system: PRACTICE_SYSTEM_PROMPT,
+      prompt: buildPracticePrompt(questionnaire, message, turns),
+      schema: PracticeReplySchema,
     });
   });
 

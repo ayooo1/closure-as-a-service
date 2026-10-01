@@ -7,6 +7,7 @@ import {
   smsHref,
   streamGeneration,
   streamLogistics,
+  streamPractice,
   streamRefine,
   streamReplies,
 } from "./generation";
@@ -157,6 +158,16 @@ describe("follow-up streams", () => {
     const yields = await collect(streamLogistics({ questionnaire: INPUT, topics: ["belongings"] }, { fetchImpl }));
     expect(fetchImpl).toHaveBeenCalledWith("/api/logistics", expect.objectContaining({ method: "POST" }));
     expect(yields).toEqual([{ message: "When" }, { message: "When suits you?" }]);
+  });
+
+  it("streamPractice yields their reply first, then the tip and whether it's over", async () => {
+    const text = JSON.stringify({ theySay: "Why?", coachTip: "Stay brief.", conversationOver: false });
+    const fetchImpl = vi.fn().mockResolvedValue(streamingResponse([text.slice(0, 18), text.slice(18)]));
+    const yields = await collect(streamPractice({ ...followUp, turns: [] }, { fetchImpl }));
+
+    expect(fetchImpl).toHaveBeenCalledWith("/api/practice", expect.objectContaining({ method: "POST" }));
+    expect(yields[0]).toEqual({ theySay: "Why?" });
+    expect(yields.at(-1)).toEqual({ theySay: "Why?", coachTip: "Stay brief.", conversationOver: false });
   });
 
   it("follow-ups map errors the same way", async () => {

@@ -3,6 +3,7 @@ import {
   durationLabel,
   EndingSchema,
   GenerationSchema,
+  PracticeRequestSchema,
   QuestionnaireSchema,
   REASON_LABELS,
   REASONS_BY_ENDING,
@@ -108,5 +109,25 @@ describe("follow-up requests", () => {
     const value = { replies: [{ theySay: "Why?", youCanSay: "We want different things." }] };
     expect(RepliesSchema.parse(value)).toEqual(value);
     expect(RepliesSchema.safeParse({ replies: [{ theySay: "Why?" }] }).success).toBe(false);
+  });
+});
+
+describe("PracticeRequestSchema", () => {
+  const base = { questionnaire: VALID, message: "It's over." };
+  it("accepts an opening request and an alternating conversation ending on the user", () => {
+    expect(PracticeRequestSchema.safeParse({ ...base, turns: [] }).success).toBe(true);
+    const turns = [
+      { role: "them", text: "Why?" },
+      { role: "you", text: "I've decided." },
+    ];
+    expect(PracticeRequestSchema.safeParse({ ...base, turns }).success).toBe(true);
+  });
+
+  it("rejects replies over 1000 characters", () => {
+    const turns = [
+      { role: "them", text: "Why?" },
+      { role: "you", text: "x".repeat(1001) },
+    ];
+    expect(PracticeRequestSchema.safeParse({ ...base, turns }).success).toBe(false);
   });
 });

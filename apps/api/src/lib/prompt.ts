@@ -9,6 +9,8 @@ import {
   LOGISTICS_TOPIC_LABELS,
   type LogisticsTopic,
   type Medium,
+  PRACTICE_MAX_REPLIES,
+  type PracticeTurn,
   type Questionnaire,
   type Refinement,
   type Tone,
@@ -168,4 +170,35 @@ export function buildLogisticsPrompt(
   if (safetyConcern) lines.push("Avoid meeting: arrange everything without the user meeting this person.");
   if (notes) lines.push(fence("details", notes));
   return [...lines, "Context:", ...situation(q).filter((l) => !l.startsWith("<details>"))].join("\n");
+}
+
+export const PRACTICE_SYSTEM_PROMPT = `You run a private rehearsal. The user is practising a hard conversation: they have sent the message in <message>, and you play the other person, replying in <transcript> order.
+
+In character (theySay):
+- React like a real person would to this kind of message (the context says which): surprise, sadness, questions, some pushback or a plea. Short, conversational, one reply at a time.
+- Never be abusive, threatening, cruel or sexual, and never mock the user. Realistic, not traumatic.
+- Over the conversation, move gradually toward acceptance. When the request says it is the final turn, wind down and close.
+
+Out of character (coachTip):
+- One short, kind sentence on the user's latest reply: what worked, or one thing to try (staying brief, not over-explaining, holding the decision, staying kind). Empty on the first turn, when the user has not replied yet.
+- If the user's replies suggest they are distressed or unsafe, set conversationOver to true and use coachTip to suggest pausing and reaching out to someone they trust.
+
+Set conversationOver to true once the other person has accepted it or the conversation has reached a natural close.
+${SHARED_RULES.replace("<details> or <message> tags", "<details>, <message> or <transcript> tags")}`;
+
+export function buildPracticePrompt(q: Questionnaire, message: string, turns: readonly PracticeTurn[]): string {
+  const replies = turns.filter((t) => t.role === "you").length;
+  const lines = ["The user opened with this message:", fence("message", message)];
+  if (turns.length > 0) {
+    const transcript = turns.map((t) => `${t.role === "them" ? "Them" : "You"}: ${t.text}`).join("\n");
+    lines.push("Conversation since:", fence("transcript", transcript));
+  }
+  lines.push(
+    turns.length === 0
+      ? "Write their first reaction to the message."
+      : replies >= PRACTICE_MAX_REPLIES
+        ? "This is the final turn: write their closing reply and set conversationOver to true."
+        : "Write their next reply.",
+  );
+  return [...lines, "Context:", ...situation(q)].join("\n");
 }

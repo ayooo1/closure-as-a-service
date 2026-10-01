@@ -3,8 +3,21 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GenerationCache } from "../lib/cache.js";
 import type { TextGenerator } from "../lib/generator.js";
-import { GenerationSchema, LogisticsSchema, RefinedSchema, RepliesSchema, type Feedback } from "@caas/shared";
-import { LOGISTICS_SYSTEM_PROMPT, REFINE_SYSTEM_PROMPT, REPLIES_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../lib/prompt.js";
+import {
+  GenerationSchema,
+  LogisticsSchema,
+  PracticeReplySchema,
+  RefinedSchema,
+  RepliesSchema,
+  type Feedback,
+} from "@caas/shared";
+import {
+  LOGISTICS_SYSTEM_PROMPT,
+  PRACTICE_SYSTEM_PROMPT,
+  REFINE_SYSTEM_PROMPT,
+  REPLIES_SYSTEM_PROMPT,
+  SYSTEM_PROMPT,
+} from "../lib/prompt.js";
 import { failingGenerator, SAMPLE_GENERATION, streamingGenerator } from "../testing/fake-generator.js";
 import { generateRoutes, type GenerateDeps } from "./generate.js";
 
@@ -392,6 +405,47 @@ describe("POST /api/logistics", () => {
     const res = await app.inject({ method: "POST", url: "/api/logistics", payload: { questionnaire: QUESTIONNAIRE, ...extra } });
     expect(res.statusCode).toBe(400);
     expect(res.json<{ issues: { path: string }[] }>().issues.map((i) => i.path)).toContain(field);
+    expect(generate.calls).toHaveLength(0);
+  });
+});
+
+describe("POST /api/practice", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+  const REPLY_JSON = JSON.stringify({ theySay: "Wait, why?", coachTip: "", conversationOver: false });
+  const base = { questionnaire: { ...VALID, name: "Sam" }, message: "Sam, I'm ending things." };
+  const practise = (payload: unknown) => app!.inject({ method: "POST", url: "/api/practice", payload: payload as object });
+  const turns = (n: number) => Array.from({ length: n }, (_, i) => ({ role: i % 2 === 0 ? "them" : "you", text: `line ${i}` }));
+
+  it("streams the other person's next reply, never cached", async () => {
+    const cache = memoryCache();
+    const generate = streamingGenerator(REPLY_JSON);
+    app = await build({ cache, generate });
+
+    const res = await practise({ ...base, turns: [] });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual(JSON.parse(REPLY_JSON));
+    expect(generate.calls[0]!.system).toBe(PRACTICE_SYSTEM_PROMPT);
+    expect(generate.calls[0]!.schema).toBe(PracticeReplySchema);
+    expect(cache.get).not.toHaveBeenCalled();
+  });
+
+  it("accepts a full conversation of 8 replies", async () => {
+    app = await build({ generate: streamingGenerator(REPLY_JSON) });
+    expect((await practise({ ...base, turns: turns(16) })).statusCode).toBe(200);
+  });
+
+  it.each([
+    ["more than 8 replies", turns(18)],
+    ["turns that don't alternate", [{ role: "them", text: "Why?" }, { role: "them", text: "Hello?" }]],
+    ["a conversation starting with the user", [{ role: "you", text: "Hi" }, { role: "them", text: "Why?" }]],
+    ["a conversation not ending on the user's reply", [{ role: "them", text: "Why?" }]],
+    ["an empty reply", [{ role: "them", text: "Why?" }, { role: "you", text: "   " }]],
+  ])("rejects %s with 400", async (_label, badTurns) => {
+    const generate = streamingGenerator(REPLY_JSON);
+    app = await build({ generate });
+    const res = await practise({ ...base, turns: badTurns });
+    expect(res.statusCode).toBe(400);
     expect(generate.calls).toHaveLength(0);
   });
 });

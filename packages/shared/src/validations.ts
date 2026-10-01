@@ -260,3 +260,40 @@ export const LogisticsSchema = z.object({
   message: z.string().describe("The practical follow-up message, ready to send"),
 });
 export type Logistics = z.infer<typeof LogisticsSchema>;
+
+// ---- Practice conversation ----
+
+/** The most replies the user can make in one practice conversation (each costs a model call). */
+export const PRACTICE_MAX_REPLIES = 8;
+export const PRACTICE_TEXT_MAX_LENGTH = 1000;
+
+export const PracticeTurnSchema = z.object({
+  role: z.enum(["them", "you"]),
+  text: z.string().trim().min(1).max(PRACTICE_TEXT_MAX_LENGTH),
+});
+export type PracticeTurn = z.infer<typeof PracticeTurnSchema>;
+
+/**
+ * POST /api/practice: the next thing the other person says. `message` opens the conversation;
+ * `turns` is everything since, alternating them/you and ending on the user's reply (or empty
+ * for their first reaction).
+ */
+export const PracticeRequestSchema = z.object({
+  questionnaire: QuestionnaireSchema,
+  message: MessageText,
+  turns: z
+    .array(PracticeTurnSchema)
+    .max(PRACTICE_MAX_REPLIES * 2)
+    .refine((turns) => turns.every((t, i) => t.role === (i % 2 === 0 ? "them" : "you")), "Turns must alternate, starting with them")
+    .refine((turns) => turns.length % 2 === 0, "The last turn must be yours"),
+});
+export type PracticeRequest = z.input<typeof PracticeRequestSchema>;
+
+export const PracticeReplySchema = z.object({
+  theySay: z.string().describe("The other person's next reply, in character"),
+  coachTip: z
+    .string()
+    .describe("Out of character: one short, kind sentence of feedback on the user's latest reply; empty on the first turn"),
+  conversationOver: z.boolean().describe("True when the conversation has reached a natural close"),
+});
+export type PracticeReply = z.infer<typeof PracticeReplySchema>;

@@ -4,6 +4,8 @@ import type {
   Generation,
   Logistics,
   LogisticsRequest,
+  PracticeReply,
+  PracticeRequest,
   QuestionnaireInput,
   RefineRequest,
   Refined,
@@ -132,6 +134,19 @@ export function streamReplies(input: RepliesRequest, opts?: StreamOptions): Asyn
 
 export function streamLogistics(input: LogisticsRequest, opts?: StreamOptions): AsyncGenerator<Partial<Logistics>> {
   return streamJson("/api/logistics", input, (p) => (typeof p?.message === "string" ? { message: p.message } : {}), opts);
+}
+
+export function streamPractice(input: PracticeRequest, opts?: StreamOptions): AsyncGenerator<Partial<PracticeReply>> {
+  return streamJson(
+    "/api/practice",
+    input,
+    (p) => ({
+      ...(typeof p?.theySay === "string" ? { theySay: p.theySay } : {}),
+      ...(typeof p?.coachTip === "string" ? { coachTip: p.coachTip } : {}),
+      ...(typeof p?.conversationOver === "boolean" ? { conversationOver: p.conversationOver } : {}),
+    }),
+    opts,
+  );
 }
 
 /** iOS and Android both accept `sms:?&body=`; there's no recipient, the user picks one. */

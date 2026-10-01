@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Check, MessageCircleQuestion, Pencil, ThumbsDown, ThumbsUp, Undo2, Wand2 } from "lucide-react";
+import { Check, MessageCircleQuestion, MessagesSquare, Pencil, ThumbsDown, ThumbsUp, Undo2, Wand2 } from "lucide-react";
 import {
   MESSAGE_MAX_LENGTH,
   REFINEMENT_LABELS,
@@ -11,6 +11,7 @@ import {
   type Refined,
   type Refinement,
 } from "@caas/shared";
+import { PracticePanel } from "@/components/practice-panel";
 import { CopyButton, SendLink } from "@/components/share-actions";
 import { Button } from "@/components/ui/button";
 import { useJsonStream } from "@/hooks/use-json-stream";
@@ -106,6 +107,7 @@ export function ResultCard({
   const [previous, setPrevious] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [rewriteOpen, setRewriteOpen] = useState(false);
+  const [practising, setPractising] = useState(false);
   const refine = useJsonStream(streamRefine, NO_REFINEMENT);
   const replies = useJsonStream(streamReplies, NO_REPLIES);
 
@@ -113,7 +115,8 @@ export function ResultCard({
   const refining = refine.status === "streaming";
   // While a rewrite streams, show it in place of the message.
   const message = refining ? (refine.data.message ?? "") : (override ?? original);
-  const busy = refining || replies.status === "streaming";
+  // While practising, the message is fixed: it's the conversation's opening line.
+  const busy = refining || replies.status === "streaming" || practising;
 
   function replaceMessage(next: string) {
     setPrevious(message);
@@ -241,24 +244,36 @@ export function ResultCard({
             </div>
           )}
 
-          {!editing &&
-            (safetyConcern ? null : replies.status === "idle" ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="mt-2 -ml-2"
-                disabled={busy}
-                onClick={() => void replies.start({ questionnaire, message })}
-              >
-                <MessageCircleQuestion /> What if they reply?
-              </Button>
-            ) : replies.status === "error" ? (
-              <p role="alert" className="mt-3 text-sm text-primary">
-                {replies.error.message}
-              </p>
-            ) : (
-              <RepliesPanel replies={replies.data} streaming={replies.status === "streaming"} />
-            ))}
+          {/* Rehearsal tools are hidden when the user may be unsafe: they owe this person no conversation. */}
+          {!editing && !safetyConcern && (
+            <>
+              {(replies.status === "idle" || !practising) && (
+                <div className="mt-2 -ml-2 flex flex-wrap">
+                  {replies.status === "idle" && (
+                    <Button variant="ghost" size="sm" disabled={busy} onClick={() => void replies.start({ questionnaire, message })}>
+                      <MessageCircleQuestion /> What if they reply?
+                    </Button>
+                  )}
+                  {!practising && (
+                    <Button variant="ghost" size="sm" disabled={busy} onClick={() => setPractising(true)}>
+                      <MessagesSquare /> Practise the conversation
+                    </Button>
+                  )}
+                </div>
+              )}
+              {replies.status === "error" && (
+                <p role="alert" className="mt-3 text-sm text-primary">
+                  {replies.error.message}
+                </p>
+              )}
+              {(replies.status === "streaming" || replies.status === "done") && (
+                <RepliesPanel replies={replies.data} streaming={replies.status === "streaming"} />
+              )}
+              {practising && (
+                <PracticePanel questionnaire={questionnaire} message={message} onClose={() => setPractising(false)} />
+              )}
+            </>
+          )}
         </>
       )}
     </motion.article>
