@@ -151,10 +151,10 @@ export function buildRepliesPrompt(q: Questionnaire, message: string): string {
 export const LOGISTICS_SYSTEM_PROMPT = `You help someone who has just ended a relationship or friendship write a short, practical follow-up about the shared things that still need sorting out.
 
 Rules:
-- Calm, neutral and businesslike in the requested tone; brief. This is about logistics, not feelings: do not revisit the ending or reopen any decision.
+- Calm, neutral and businesslike in the requested tone; brief. This is about logistics only: no feelings, gratitude or reflections on the relationship, and do not revisit the ending or reopen any decision.
 - Cover each listed topic with one clear, fair next step. Never invent dates, times, places, amounts or items; invite them to suggest what works, or say what the user's notes say.
 - Make it easy to reply to, without inviting a wider conversation.
-- When the request says to avoid meeting, propose handovers that need no meeting: a trusted friend collecting or dropping off, a courier, or leaving items somewhere agreed. Never suggest meeting alone or sharing a location.
+- When the request says to avoid meeting, keep everything in writing and propose handovers that need no contact: a trusted friend collecting or dropping off, a courier, or leaving items somewhere agreed. Never suggest meeting, calls or "talking it through", and never suggest sharing a location.
 ${SHARED_RULES}`;
 
 export function buildLogisticsPrompt(
@@ -167,7 +167,7 @@ export function buildLogisticsPrompt(
     `Write the follow-up as ${MEDIUM_GUIDANCE[q.medium === "in-person" ? "text" : q.medium]}.`,
     `Things to sort out: ${topics.map((t) => LOGISTICS_TOPIC_LABELS[t]).join("; ")}.`,
   ];
-  if (safetyConcern) lines.push("Avoid meeting: arrange everything without the user meeting this person.");
+  if (safetyConcern) lines.push("Avoid meeting: arrange everything in writing, without the user meeting or calling this person.");
   if (notes) lines.push(fence("details", notes));
   return [...lines, "Context:", ...situation(q).filter((l) => !l.startsWith("<details>"))].join("\n");
 }
@@ -180,7 +180,8 @@ In character (theySay):
 - Over the conversation, move gradually toward acceptance. When the request says it is the final turn, wind down and close.
 
 Out of character (coachTip):
-- One short, kind sentence on the user's latest reply: what worked, or one thing to try (staying brief, not over-explaining, holding the decision, staying kind). Empty on the first turn, when the user has not replied yet.
+- Whenever the user has replied, coachTip is required: one short, kind sentence about their latest "You:" line, saying what worked or one thing to try (staying brief, not over-explaining, holding the decision, staying kind).
+- Only on the very first turn, before the user has replied, coachTip is an empty string.
 - If the user's replies suggest they are distressed or unsafe, set conversationOver to true and use coachTip to suggest pausing and reaching out to someone they trust.
 
 Set conversationOver to true once the other person has accepted it or the conversation has reached a natural close.
@@ -195,10 +196,8 @@ export function buildPracticePrompt(q: Questionnaire, message: string, turns: re
   }
   lines.push(
     turns.length === 0
-      ? "Write their first reaction to the message."
-      : replies >= PRACTICE_MAX_REPLIES
-        ? "This is the final turn: write their closing reply and set conversationOver to true."
-        : "Write their next reply.",
+      ? "Write their first reaction to the message. coachTip is empty."
+      : `Write their ${replies >= PRACTICE_MAX_REPLIES ? "closing reply (this is the final turn: set conversationOver to true)" : "next reply"}, and a coachTip about the user's latest reply: ${JSON.stringify(turns.at(-1)!.text.replace(/[<>]/g, ""))}.`,
   );
   return [...lines, "Context:", ...situation(q)].join("\n");
 }
