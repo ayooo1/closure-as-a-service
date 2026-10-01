@@ -6,16 +6,16 @@ const q = QuestionnaireSchema.parse({ duration: "few-dates", reason: "other", to
 
 describe("cacheKey", () => {
   it("is stable, namespaced and short", () => {
-    const key = cacheKey(q, "gpt-4o-mini");
-    expect(key).toBe(cacheKey({ ...q }, "gpt-4o-mini"));
+    const key = cacheKey(q, "claude-haiku-4-5:default");
+    expect(key).toBe(cacheKey({ ...q }, "claude-haiku-4-5:default"));
     expect(key).toMatch(/^caas:gen:[\w-]{43}$/);
   });
 
   it("differs by model and by any answer", () => {
-    const key = cacheKey(q, "gpt-4o-mini");
-    expect(cacheKey(q, "gpt-4o")).not.toBe(key);
-    expect(cacheKey({ ...q, tone: "direct" }, "gpt-4o-mini")).not.toBe(key);
-    expect(cacheKey({ ...q, details: "x" }, "gpt-4o-mini")).not.toBe(key);
+    const key = cacheKey(q, "claude-haiku-4-5:default");
+    expect(cacheKey(q, "claude-opus-5-5:default")).not.toBe(key);
+    expect(cacheKey({ ...q, tone: "direct" }, "claude-haiku-4-5:default")).not.toBe(key);
+    expect(cacheKey({ ...q, details: "x" }, "claude-haiku-4-5:default")).not.toBe(key);
   });
 });
 

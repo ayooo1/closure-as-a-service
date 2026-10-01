@@ -1,18 +1,26 @@
 import { Readable } from "node:stream";
 import type { FastifyPluginAsync } from "fastify";
-import { streamObject, type LanguageModel } from "ai";
 import { GenerationSchema, QuestionnaireSchema } from "@caas/shared";
 import { cacheKey, type GenerationCache } from "../lib/cache.js";
+import type { TextGenerator } from "../lib/generator.js";
 import { buildPrompt, SYSTEM_PROMPT } from "../lib/prompt.js";
 
 export interface GenerateDeps {
-  model: LanguageModel;
+  generate: TextGenerator;
+  /** Identifies the model + settings, so changing them doesn't serve stale cached output. */
+  modelId: string;
   cache: GenerationCache;
 }
 
-export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { model, cache }) => {
-  const modelId = typeof model === "string" ? model : model.modelId;
+function isValidGeneration(text: string): boolean {
+  try {
+    return GenerationSchema.safeParse(JSON.parse(text)).success;
+  } catch {
+    return false;
+  }
+}
 
+export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { generate, modelId, cache }) => {
   app.post(
     "/generate",
     // rateLimit: {} opts in with the plugin-level max/window (Redis-backed, shared across replicas).
@@ -43,42 +51,40 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { mo
         if (!reply.raw.writableFinished) abort.abort();
       });
 
-      let failure: unknown;
-      const result = streamObject({
-        model,
-        schema: GenerationSchema,
-        schemaName: "breakup_messages",
-        system: SYSTEM_PROMPT,
-        prompt: buildPrompt(questionnaire),
-        temperature: 0.9,
-        maxOutputTokens: 1500,
-        abortSignal: abort.signal,
-        onError: ({ error }) => {
-          failure = error;
-          if (!abort.signal.aborted) req.log.error({ err: error }, "generation failed");
-        },
-        onFinish: ({ object }) => {
-          // Only complete, schema-valid generations are cached.
-          if (object) void cache.set(key, JSON.stringify(object));
-        },
-      });
+      const tokens = generate({ system: SYSTEM_PROMPT, prompt: buildPrompt(questionnaire), signal: abort.signal });
 
-      // Wait for the first chunk before committing to a 200, so an upstream failure
+      // Wait for the first token before committing to a 200, so an upstream failure
       // (bad key, quota, outage) surfaces as a 502 instead of an empty success.
-      const reader = result.textStream.getReader();
-      const first = await reader.read();
+      let first: IteratorResult<string, string | null>;
+      try {
+        first = await tokens.next();
+      } catch (err) {
+        req.log.error({ err }, "generation failed");
+        return reply.code(502).send({ error: "generation_failed" });
+      }
       if (first.done) {
-        req.log.warn({ err: failure }, "generation produced no output");
+        req.log.warn({ stopReason: first.value }, "generation produced no output");
         return reply.code(502).send({ error: "generation_failed" });
       }
 
-      async function* chunks() {
-        yield first.value;
-        for (let next = await reader.read(); !next.done; next = await reader.read()) {
+      // Mid-stream errors propagate and abort the response, so the client sees a failed
+      // request rather than a silently truncated success.
+      async function* relay(firstChunk: string) {
+        let text = firstChunk;
+        yield firstChunk;
+        let next = await tokens.next();
+        for (; !next.done; next = await tokens.next()) {
+          text += next.value;
           yield next.value;
         }
+        // Only complete, schema-valid generations are cached (not refusals or truncations).
+        if (next.value === "end_turn" && isValidGeneration(text)) {
+          void cache.set(key, text);
+        } else {
+          req.log.warn({ stopReason: next.value }, "generation incomplete or invalid; not cached");
+        }
       }
-      return reply.header("x-cache", "miss").type("text/plain; charset=utf-8").send(Readable.from(chunks()));
+      return reply.header("x-cache", "miss").type("text/plain; charset=utf-8").send(Readable.from(relay(first.value)));
     },
   );
 };

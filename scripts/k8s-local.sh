@@ -31,14 +31,15 @@ build_images() {
 
 apply_secret() {
   local key
-  key="$(grep -E '^OPENAI_API_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'" || true)"
-  if [[ -z "$key" || "$key" == "sk-..." ]]; then
-    echo "✗ Set OPENAI_API_KEY in .env (cp .env.example .env)" >&2
+  key="$(grep -E '^ANTHROPIC_API_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'" || true)"
+  if [[ -z "$key" || "$key" == "sk-ant-..." ]]; then
+    echo "✗ Set ANTHROPIC_API_KEY in .env (cp .env.example .env)" >&2
     exit 1
   fi
-  kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS" >/dev/null
+  # Declaratively, so the later `kubectl apply -k` owns the namespace without warnings.
+  kubectl apply -f k8s/namespace.yaml >/dev/null
   kubectl -n "$NS" create secret generic caas-secrets \
-    --from-literal=OPENAI_API_KEY="$key" \
+    --from-literal=ANTHROPIC_API_KEY="$key" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   echo "• Secret caas-secrets applied"
 }
