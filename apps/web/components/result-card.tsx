@@ -2,7 +2,18 @@
 
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Check, MessageCircleQuestion, MessagesSquare, Pencil, ThumbsDown, ThumbsUp, Undo2, Wand2 } from "lucide-react";
+import {
+  Check,
+  MessageCircleQuestion,
+  MessagesSquare,
+  Pencil,
+  Square,
+  ThumbsDown,
+  ThumbsUp,
+  Undo2,
+  Volume2,
+  Wand2,
+} from "lucide-react";
 import {
   MESSAGE_MAX_LENGTH,
   REFINEMENT_LABELS,
@@ -15,6 +26,7 @@ import { PracticePanel } from "@/components/practice-panel";
 import { CopyButton, SendLink } from "@/components/share-actions";
 import { Button } from "@/components/ui/button";
 import { useJsonStream } from "@/hooks/use-json-stream";
+import { useSpeech } from "@/hooks/use-speech";
 import {
   sendFeedback,
   streamRefine,
@@ -90,6 +102,7 @@ export function ResultCard({
   medium,
   questionnaire,
   safetyConcern,
+  onShare,
 }: {
   variation: PartialVariation | undefined;
   index: number;
@@ -100,8 +113,11 @@ export function ResultCard({
   medium: Medium;
   questionnaire: Questionnaire;
   safetyConcern: boolean;
+  /** The user copied or opened the message to send it. */
+  onShare: () => void;
 }) {
   const reduceMotion = useReducedMotion();
+  const speech = useSpeech();
   // The user's own version of this message (after an edit or a rewrite), and the one before it.
   const [override, setOverride] = useState<string | null>(null);
   const [previous, setPrevious] = useState<string | null>(null);
@@ -179,8 +195,19 @@ export function ResultCard({
               </Button>
             ) : (
               <>
-                <CopyButton text={message} />
-                <SendLink medium={medium} message={message} />
+                <CopyButton text={message} onCopy={onShare} />
+                <SendLink medium={medium} message={message} onSend={onShare} />
+                {speech.supported && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={speech.speaking}
+                    onClick={() => (speech.speaking ? speech.stop() : speech.speak(message))}
+                  >
+                    {speech.speaking ? <Square /> : <Volume2 />}
+                    {speech.speaking ? "Stop reading" : "Read aloud"}
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"

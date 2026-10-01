@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClosureApp } from "./closure-app";
@@ -608,5 +608,111 @@ describe("practice conversation", () => {
     await completeWizard(user);
     await resultCards();
     expect(screen.queryByRole("button", { name: /practise the conversation/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("after you send it", () => {
+  it("appears once a message is copied, and stays closed after dismissing", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const cards = await resultCards();
+    expect(screen.queryByRole("complementary", { name: "After you send it" })).not.toBeInTheDocument();
+
+    await user.click(within(cards[0]!).getByRole("button", { name: "Copy" }));
+    const aftercare = await screen.findByRole("complementary", { name: "After you send it" });
+    expect(within(aftercare).getByText(/no-contact time/i)).toBeInTheDocument();
+    expect(within(aftercare).getByText(/tell a friend/i)).toBeInTheDocument();
+    expect(within(aftercare).getByRole("link", { name: "findahelpline.com" })).toBeInTheDocument();
+    expect(within(aftercare).queryByText(/blocking/i)).not.toBeInTheDocument();
+
+    await user.click(within(aftercare).getByRole("checkbox", { name: /tell a friend/i }));
+    expect(within(aftercare).getByRole("checkbox", { name: /tell a friend/i })).toBeChecked();
+
+    await user.click(within(aftercare).getByRole("button", { name: "Dismiss" }));
+    await user.click(within(cards[1]!).getByRole("button", { name: "Copy" }));
+    expect(screen.queryByRole("complementary", { name: "After you send it" })).not.toBeInTheDocument();
+  });
+
+  it("appears when a message is opened in Messages too", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const link = within((await resultCards())[0]!).getByRole("link", { name: /open in messages/i });
+    link.addEventListener("click", (e) => e.preventDefault()); // jsdom can't follow sms: links
+    await user.click(link);
+    expect(await screen.findByRole("complementary", { name: "After you send it" })).toBeInTheDocument();
+  });
+
+  it("puts blocking first when there's a safety concern", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "/api/generate": JSON.stringify({ ...GENERATION, safetyConcern: true }) });
+    render(<ClosureApp />);
+    await completeWizard(user);
+    await user.click(within((await resultCards())[0]!).getByRole("button", { name: "Copy" }));
+
+    const items = within(await screen.findByRole("complementary", { name: "After you send it" })).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent(/blocking their number/i);
+  });
+});
+
+describe("read aloud", () => {
+  function fakeSpeech() {
+    const spoken: { text: string; onend?: () => void }[] = [];
+    const synth = { speak: vi.fn((u: { text: string }) => spoken.push(u)), cancel: vi.fn() };
+    vi.stubGlobal("speechSynthesis", synth);
+    vi.stubGlobal(
+      "SpeechSynthesisUtterance",
+      class {
+        rate = 1;
+        onend?: () => void;
+        onerror?: () => void;
+        constructor(public text: string) {}
+      },
+    );
+    return { synth, spoken };
+  }
+
+  it("reads talking points as plain sentences and can be stopped", async () => {
+    const { synth, spoken } = fakeSpeech();
+    const user = userEvent.setup();
+    const points = { ...GENERATION, variations: [{ angle: "Points", message: "- I care about you.\n- I'm ending this." }] };
+    fakeApi({ "/api/generate": JSON.stringify(points) });
+    render(<ClosureApp />);
+    await completeWizard(user, "In person (talking points)");
+    const card = (await resultCards())[0]!;
+
+    await user.click(within(card).getByRole("button", { name: "Read aloud" }));
+    expect(synth.speak).toHaveBeenCalledOnce();
+    expect(spoken[0]!.text).toBe("I care about you.\nI'm ending this.");
+
+    const stop = within(card).getByRole("button", { name: "Stop reading" });
+    expect(stop).toHaveAttribute("aria-pressed", "true");
+    await user.click(stop);
+    expect(synth.cancel).toHaveBeenCalled();
+    expect(within(card).getByRole("button", { name: "Read aloud" })).toBeInTheDocument();
+  });
+
+  it("resets when speech finishes on its own", async () => {
+    const { spoken } = fakeSpeech();
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+
+    await user.click(within(card).getByRole("button", { name: "Read aloud" }));
+    act(() => spoken[0]!.onend!());
+    expect(within(card).getByRole("button", { name: "Read aloud" })).toBeInTheDocument();
+  });
+
+  it("is hidden in browsers without speech synthesis", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    expect(within((await resultCards())[0]!).queryByRole("button", { name: "Read aloud" })).not.toBeInTheDocument();
   });
 });
