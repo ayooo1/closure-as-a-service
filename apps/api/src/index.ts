@@ -15,21 +15,26 @@ await redis.connect().catch((err) => {
 
 // Graceful shutdown on SIGTERM so rolling updates don't drop in-flight streams.
 let shuttingDown = false;
+async function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  app.log.info(`${signal} received, shutting down`);
+  // Stay under terminationGracePeriodSeconds (30s) minus the preStop delay.
+  const force = setTimeout(() => process.exit(1), 20_000).unref();
+  let code = 0;
+  try {
+    await app.close();
+    await redis.quit().catch(() => redis.disconnect());
+  } catch (err) {
+    app.log.error({ err }, "Error during shutdown");
+    code = 1;
+  } finally {
+    clearTimeout(force);
+    process.exit(code);
+  }
+}
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    app.log.info(`${signal} received, shutting down`);
-    // Stay under terminationGracePeriodSeconds (30s) minus the preStop delay.
-    const force = setTimeout(() => process.exit(1), 20_000).unref();
-    try {
-      await app.close();
-      await redis.quit().catch(() => redis.disconnect());
-    } finally {
-      clearTimeout(force);
-      process.exit(0);
-    }
-  });
+  process.on(signal, () => void shutdown(signal));
 }
 
 await app.listen({ port: env.PORT, host: env.HOST });

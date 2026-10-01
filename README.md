@@ -89,6 +89,7 @@ The Next.js dev server proxies `/api/*` to the Fastify API, so the browser alway
 
 ```bash
 npm test                        # unit + HTTP tests (Vitest, Fastify inject — no Redis or OpenAI needed)
+npm run lint                    # ESLint (type-aware TS rules + Next.js rules for apps/web)
 npm run typecheck
 npm run k8s:render              # render the Kustomize manifests
 ```
@@ -107,7 +108,13 @@ cp .env.example .env            # add OPENAI_API_KEY; it becomes the caas-secret
 ./scripts/k8s-local.sh up       # cluster + images + deploy  →  http://localhost:8080
 ```
 
-On an existing cluster: create the `caas-secrets` Secret, push the images to a registry, then `kubectl apply -k k8s/`.
+On an existing cluster, use the images CI publishes; see [`k8s/README.md`](k8s/README.md#deploy-the-published-images).
+
+### CI
+
+[GitHub Actions](.github/workflows/ci.yml) runs on every pull request and push to `main`: lint, typecheck, tests,
+Kubernetes manifest validation and Docker image builds. When all of that passes on `main`, both images are pushed to
+GitHub Container Registry as `ghcr.io/ayooo1/caas-{api,web}`, tagged `sha-<commit>` and `latest`.
 
 See [`k8s/README.md`](k8s/README.md) for Minikube / k3d / Kind specifics.
 
@@ -127,7 +134,7 @@ See [`k8s/README.md`](k8s/README.md) for Minikube / k3d / Kind specifics.
 - [ ] Wizard UI and streaming result cards
 - [ ] Dockerfiles and docker-compose
 - [ ] Kubernetes manifests (Deployments, Services, ConfigMap, Secret, Ingress, HPA)
-- [ ] CI: lint, typecheck, image build and push
+- [x] CI: lint, typecheck, image build and push
 
 ## 📄 License
 
