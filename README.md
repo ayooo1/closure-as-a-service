@@ -85,6 +85,14 @@ npm run dev                     # web → http://localhost:3000, api → http://
 
 The Next.js dev server proxies `/api/*` to the Fastify API, so the browser always talks to a single origin, just as it does behind the Ingress in Kubernetes.
 
+### Tests
+
+```bash
+npm test                        # unit + HTTP tests (Vitest, Fastify inject — no Redis or OpenAI needed)
+npm run typecheck
+npm run k8s:render              # render the Kustomize manifests
+```
+
 ### Docker Compose
 
 ```bash
@@ -94,8 +102,12 @@ docker compose up --build
 ### Kubernetes
 
 ```bash
-kubectl apply -k k8s/
+brew install k3d                # plus a Docker runtime (Docker Desktop, OrbStack, Colima)
+cp .env.example .env            # add OPENAI_API_KEY; it becomes the caas-secrets Secret
+./scripts/k8s-local.sh up       # cluster + images + deploy  →  http://localhost:8080
 ```
+
+On an existing cluster: create the `caas-secrets` Secret, push the images to a registry, then `kubectl apply -k k8s/`.
 
 See [`k8s/README.md`](k8s/README.md) for Minikube / k3d / Kind specifics.
 

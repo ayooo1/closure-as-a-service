@@ -14,10 +14,18 @@ spec:
       labels: { app.kubernetes.io/name: api, app.kubernetes.io/part-of: caas }
     spec:
       terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: api }
       containers:
         - name: api
           image: caas-api:local
@@ -42,7 +50,7 @@ spec:
           lifecycle:
             # Give the Service time to drop this endpoint before SIGTERM.
             preStop:
-              exec: { command: ["sleep", "5"] }
+              sleep: { seconds: 5 }
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 500m, memory: 256Mi }
@@ -66,10 +74,12 @@ spec:
       labels: { app.kubernetes.io/name: web, app.kubernetes.io/part-of: caas }
     spec:
       terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: web
           image: caas-web:local
@@ -90,10 +100,19 @@ spec:
             failureThreshold: 2
           lifecycle:
             preStop:
-              exec: { command: ["sleep", "5"] }
+              sleep: { seconds: 5 }
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits: { cpu: 500m, memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: next-cache, mountPath: /app/apps/web/.next/cache }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: next-cache
+          emptyDir: { sizeLimit: 256Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }

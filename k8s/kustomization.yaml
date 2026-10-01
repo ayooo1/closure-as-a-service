@@ -9,4 +9,6 @@ resources:
   - service.yaml
   - ingress.yaml
   - hpa.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
 # The Secret (caas-secrets) is created out-of-band from .env; see secret.example.yaml.
