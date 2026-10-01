@@ -10,6 +10,8 @@
 | `service.yaml` | ClusterIP Services for `api` and `web` |
 | `ingress.yaml` | `/api` → api, `/` → web |
 | `hpa.yaml` | CPU-based autoscaling for api (2–6) and web (1–4) |
+| `pdb.yaml` | Keeps ≥1 api pod up during node drains |
+| `networkpolicy.yaml` | Only api pods may connect to Redis |
 | `kustomization.yaml` | Ties it together: `kubectl apply -k k8s/` |
 | `k3d-cluster.yaml` | Local k3d cluster, exposes the Ingress on `localhost:8080` |
 

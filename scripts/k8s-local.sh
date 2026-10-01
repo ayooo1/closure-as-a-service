@@ -21,9 +21,10 @@ create_cluster() {
 
 build_images() {
   [[ -f package-lock.json ]] || { echo "• Generating package-lock.json"; npm install --package-lock-only --no-audit --no-fund; }
-  echo "• Building images"
-  docker build -t caas-api:local -f apps/api/Dockerfile .
-  docker build -t caas-web:local -f apps/web/Dockerfile .
+  echo "• Building images (in parallel)"
+  docker build -q -t caas-api:local -f apps/api/Dockerfile . & local api=$!
+  docker build -q -t caas-web:local -f apps/web/Dockerfile . & local web=$!
+  wait "$api" && wait "$web"
   echo "• Importing images into the cluster"
   k3d image import caas-api:local caas-web:local -c "$CLUSTER"
 }
@@ -44,10 +45,13 @@ apply_secret() {
 
 deploy() {
   apply_secret
+  local existed
+  existed="$(kubectl -n "$NS" get deployment api web -o name 2>/dev/null || true)"
   echo "• Applying manifests"
   kubectl apply -k k8s/
   # Pick up freshly imported images even though the tag (:local) didn't change.
-  kubectl -n "$NS" rollout restart deployment/api deployment/web >/dev/null
+  # Skipped on first deploy: the pods were just created from the new images.
+  [[ -n "$existed" ]] && kubectl -n "$NS" rollout restart deployment/api deployment/web >/dev/null
   for d in redis api web; do
     kubectl -n "$NS" rollout status "deployment/$d" --timeout=180s
   done

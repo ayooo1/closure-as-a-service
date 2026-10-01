@@ -1,14 +1,15 @@
 # syntax=docker/dockerfile:1
 # Build context: repository root  →  docker build -f apps/api/Dockerfile .
 
-# ---- deps: full install (dev deps needed for tsup) ----
+# ---- deps: the api workspace only (incl. dev deps for tsup); skips Next.js & friends ----
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
-RUN npm ci --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --workspace=@caas/api --no-audit --no-fund
 
 # ---- builder: bundle src + @caas/shared into dist/ ----
 FROM deps AS builder
@@ -24,7 +25,8 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
-RUN npm ci --omit=dev --workspace=@caas/api --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev --workspace=@caas/api --no-audit --no-fund
 
 # ---- runner ----
 FROM node:22-alpine AS runner

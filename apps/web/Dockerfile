@@ -1,14 +1,15 @@
 # syntax=docker/dockerfile:1
 # Build context: repository root  →  docker build -f apps/web/Dockerfile .
 
-# ---- deps ----
+# ---- deps: the web workspace only ----
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
-RUN npm ci --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --workspace=@caas/web --no-audit --no-fund
 
 # ---- builder ----
 FROM deps AS builder
@@ -19,7 +20,8 @@ ENV API_INTERNAL_URL=$API_INTERNAL_URL \
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/web apps/web
-RUN npm run build --workspace=@caas/web
+RUN --mount=type=cache,target=/app/apps/web/.next/cache \
+    npm run build --workspace=@caas/web
 
 # ---- runner: Next.js standalone server only ----
 FROM node:22-alpine AS runner

@@ -6,3 +6,7 @@
 .git
 k8s
 *.md
+**/coverage
+**/*.test.ts
+**/*.test.tsx
+**/.DS_Store

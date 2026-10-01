@@ -13,9 +13,16 @@ spec:
     metadata:
       labels: { app.kubernetes.io/name: redis, app.kubernetes.io/part-of: caas }
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The redis user in the official alpine image.
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: redis:7.4-alpine
           args: ["--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
           ports:
             - { name: redis, containerPort: 6379 }
@@ -28,6 +35,15 @@ spec:
           resources:
             requests: { cpu: 50m, memory: 64Mi }
             limits: { cpu: 250m, memory: 192Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
