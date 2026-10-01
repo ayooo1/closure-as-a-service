@@ -1,3 +1,4 @@
+import { request } from "node:http";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GenerationCache } from "../lib/cache.js";
@@ -67,17 +68,18 @@ describe("POST /api/generate", () => {
     const cache = memoryCache();
     const generate = streamingGenerator(SAMPLE_JSON, { parts: 20, delayMs: 50 });
     app = await build({ cache, generate });
-    const url = await app.listen({ port: 0, host: "127.0.0.1" });
+    const url = new URL(await app.listen({ port: 0, host: "127.0.0.1" }));
 
-    const client = new AbortController();
-    const res = await fetch(`${url}/api/generate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(VALID),
-      signal: client.signal,
+    // Drop the TCP connection after the first chunk, like a browser tab closing. (fetch's
+    // AbortController isn't used: on Node 22 it leaves the socket open, hanging app.close().)
+    await new Promise<void>((resolve, reject) => {
+      const req = request(
+        { host: url.hostname, port: url.port, path: "/api/generate", method: "POST", headers: { "content-type": "application/json" } },
+        (res) => res.once("data", () => (req.destroy(), resolve())),
+      );
+      req.on("error", (err) => (req.destroyed ? undefined : reject(err)));
+      req.end(JSON.stringify(VALID));
     });
-    await res.body!.getReader().read(); // first chunk arrived: the stream is live
-    client.abort();
 
     await vi.waitFor(() => expect(generate.calls[0]!.signal.aborted).toBe(true));
     expect(cache.set).not.toHaveBeenCalled();
