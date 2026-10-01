@@ -77,6 +77,13 @@ monitoring() {
 }
 
 grafana() {
+  local port
+  for port in 3001 9090; do
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "✗ Port $port is already in use (another port-forward still running?). Find it with: lsof -nP -iTCP:$port -sTCP:LISTEN" >&2
+      exit 1
+    fi
+  done
   echo
   echo "✓ Grafana: http://localhost:3001  ·  Prometheus: http://localhost:9090  (Ctrl-C to stop)"
   kubectl -n monitoring port-forward svc/grafana 3001:3000 >/dev/null &
