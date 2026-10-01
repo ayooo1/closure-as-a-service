@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Check, Copy, Mail, MessageCircleQuestion, MessageSquare, Pencil, Undo2, Wand2 } from "lucide-react";
+import { Check, Copy, Mail, MessageCircleQuestion, MessageSquare, Pencil, ThumbsDown, ThumbsUp, Undo2, Wand2 } from "lucide-react";
 import {
   MESSAGE_MAX_LENGTH,
   REFINEMENT_LABELS,
@@ -13,7 +13,16 @@ import {
 } from "@caas/shared";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useJsonStream } from "@/hooks/use-json-stream";
-import { mailtoHref, smsHref, streamRefine, streamReplies, type PartialReply, type PartialVariation } from "@/lib/generation";
+import {
+  mailtoHref,
+  sendFeedback,
+  smsHref,
+  streamRefine,
+  streamReplies,
+  type PartialReply,
+  type PartialVariation,
+} from "@/lib/generation";
+import { cn } from "@/lib/utils";
 
 const NO_REFINEMENT: Partial<Refined> = {};
 const NO_REPLIES: PartialReply[] = [];
@@ -54,6 +63,33 @@ function SendLink({ medium, message }: { medium: Medium; message: string }) {
 const Caret = () => (
   <span className="ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 animate-pulse bg-primary" aria-hidden />
 );
+
+function Vote({ onVote }: { onVote: (vote: "up" | "down") => void }) {
+  const [vote, setVote] = useState<"up" | "down" | null>(null);
+  const choose = (v: "up" | "down") => {
+    setVote(v);
+    onVote(v);
+  };
+  return (
+    <div className="ml-auto flex items-center gap-1" role="group" aria-label="Rate this message">
+      {vote && <span className="mr-1 text-xs text-muted-foreground">Thanks!</span>}
+      {(["up", "down"] as const).map((v) => (
+        <Button
+          key={v}
+          variant="ghost"
+          size="icon"
+          aria-label={v === "up" ? "Helpful" : "Not helpful"}
+          aria-pressed={vote === v}
+          disabled={vote !== null}
+          onClick={() => choose(v)}
+          className={cn("size-8", vote === v && "text-primary disabled:opacity-100")}
+        >
+          {v === "up" ? <ThumbsUp /> : <ThumbsDown />}
+        </Button>
+      ))}
+    </div>
+  );
+}
 
 function RepliesPanel({ replies, streaming }: { replies: PartialReply[]; streaming: boolean }) {
   return (
@@ -210,6 +246,21 @@ export function ResultCard({
                     <Undo2 /> Undo
                   </Button>
                 )}
+                <Vote
+                  onVote={(vote) => {
+                    const { ending, duration, reason, tone, medium: chosenMedium } = questionnaire;
+                    void sendFeedback({
+                      vote,
+                      ending,
+                      duration,
+                      reason,
+                      tone,
+                      medium: chosenMedium,
+                      changed: message !== original,
+                      safetyConcern,
+                    });
+                  }}
+                />
               </>
             )}
           </div>

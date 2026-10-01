@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import {
+  FeedbackSchema,
   GenerationSchema,
   QuestionnaireSchema,
   RefinedSchema,
@@ -9,6 +10,7 @@ import {
 } from "@caas/shared";
 import type { z } from "zod";
 import { cacheKey, type GenerationCache } from "../lib/cache.js";
+import type { FeedbackStore } from "../lib/feedback.js";
 import type { TextGenerator } from "../lib/generator.js";
 import {
   buildPrompt,
@@ -25,6 +27,7 @@ export interface GenerateDeps {
   /** Identifies the model + settings, so changing them doesn't serve stale cached output. */
   modelId: string;
   cache: GenerationCache;
+  feedback: FeedbackStore;
 }
 
 // rateLimit: {} opts in with the plugin-level max/window (Redis-backed, shared across replicas).
@@ -37,7 +40,7 @@ function invalid(error: z.ZodError) {
   };
 }
 
-export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { generate, modelId, cache }) => {
+export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { generate, modelId, cache, feedback }) => {
   // Every response body is the route's schema as JSON text: complete on a cache hit, otherwise
   // streamed token by token. The client parses partial JSON as it arrives.
   app.addHook("onSend", async (_req, reply) => {
@@ -94,5 +97,17 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { ge
       prompt: buildRepliesPrompt(questionnaire, message),
       schema: RepliesSchema,
     });
+  });
+
+  app.post("/feedback", { ...ROUTE_OPTIONS, bodyLimit: 1024 }, async (req, reply) => {
+    const parsed = FeedbackSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
+    try {
+      await feedback.record(parsed.data, modelId);
+    } catch (err) {
+      req.log.warn({ err }, "feedback not recorded");
+      return reply.code(503).send({ error: "unavailable" });
+    }
+    return reply.code(204).send();
   });
 };

@@ -1,5 +1,6 @@
-# Single-replica Redis: holds only rate-limit counters and a response cache,
-# so losing it on restart is acceptable (no PVC).
+# Single-replica Redis: rate-limit counters and the response cache (expiring keys, fine to lose)
+# plus 👍/👎 feedback counts (no TTL, kept). Append-only persistence on a PVC keeps feedback across
+# restarts; volatile-lru evicts only expiring keys, so memory pressure never drops feedback.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,6 +8,8 @@ metadata:
   labels: { app.kubernetes.io/name: redis, app.kubernetes.io/part-of: caas }
 spec:
   replicas: 1
+  # The volume is ReadWriteOnce: stop the old pod before starting the new one.
+  strategy: { type: Recreate }
   selector:
     matchLabels: { app.kubernetes.io/name: redis }
   template:
@@ -19,11 +22,12 @@ spec:
         runAsNonRoot: true
         runAsUser: 999
         runAsGroup: 999
+        fsGroup: 999
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: redis
           image: redis:7.4-alpine
-          args: ["--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+          args: ["--save", "", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru"]
           ports:
             - { name: redis, containerPort: 6379 }
           readinessProbe:
@@ -43,7 +47,17 @@ spec:
             - { name: data, mountPath: /data }
       volumes:
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim: { claimName: redis-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  labels: { app.kubernetes.io/name: redis, app.kubernetes.io/part-of: caas }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: { storage: 1Gi }
 ---
 apiVersion: v1
 kind: Service

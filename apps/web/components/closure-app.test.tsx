@@ -33,8 +33,15 @@ function controlledResponse() {
 
 const fetchMock = vi.fn<typeof fetch>();
 /** Answers each API route with a fixed body (status 200) unless a test overrides it. */
-function fakeApi(routes: Partial<Record<"/api/generate" | "/api/refine" | "/api/replies", string | Response>> = {}) {
-  const bodies = { "/api/generate": FULL, "/api/refine": JSON.stringify({ message: REFINED }), "/api/replies": JSON.stringify(REPLIES), ...routes };
+type Route = "/api/generate" | "/api/refine" | "/api/replies" | "/api/feedback";
+function fakeApi(routes: Partial<Record<Route, string | Response>> = {}) {
+  const bodies = {
+    "/api/generate": FULL,
+    "/api/refine": JSON.stringify({ message: REFINED }),
+    "/api/replies": JSON.stringify(REPLIES),
+    "/api/feedback": "",
+    ...routes,
+  };
   fetchMock.mockImplementation((url) => {
     const body = bodies[url as keyof typeof bodies];
     return Promise.resolve(body instanceof Response ? body : new Response(body));
@@ -384,5 +391,60 @@ describe("what if they reply", () => {
     await within(card).findByText(REFINED);
     expect(within(card).queryByText("Can we talk about this?")).not.toBeInTheDocument();
     expect(within(card).getByRole("button", { name: /what if they reply/i })).toBeInTheDocument();
+  });
+});
+
+describe("voting", () => {
+  it("sends a 👍 with the answer categories only, then locks the buttons", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+
+    await user.click(within(card).getByRole("button", { name: "Helpful" }));
+
+    await waitFor(() => expect(requests("/api/feedback")).toHaveLength(1));
+    expect(requests("/api/feedback")[0]).toEqual({
+      vote: "up",
+      ending: "relationship",
+      duration: "1-3-years",
+      reason: "different-goals",
+      tone: "warm",
+      medium: "text",
+      changed: false,
+      safetyConcern: false,
+    });
+    expect(JSON.stringify(requests("/api/feedback")[0])).not.toContain("Sam"); // no name or message text
+    expect(within(card).getByText("Thanks!")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Helpful" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(card).getByRole("button", { name: "Not helpful" })).toBeDisabled();
+  });
+
+  it("marks votes on rewritten messages as changed", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+
+    await user.click(within(card).getByRole("button", { name: "Rewrite" }));
+    await user.click(within(card).getByRole("button", { name: "Shorter" }));
+    await within(card).findByText(REFINED);
+    await user.click(within(card).getByRole("button", { name: "Not helpful" }));
+
+    await waitFor(() => expect(requests("/api/feedback")[0]).toMatchObject({ vote: "down", changed: true }));
+  });
+
+  it("still thanks the user if the vote can't be recorded", async () => {
+    const user = userEvent.setup();
+    fakeApi({ "/api/feedback": new Response("{}", { status: 503 }) });
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+
+    await user.click(within(card).getByRole("button", { name: "Helpful" }));
+    expect(within(card).getByText("Thanks!")).toBeInTheDocument();
+    expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
   });
 });

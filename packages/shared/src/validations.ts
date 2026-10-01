@@ -207,3 +207,22 @@ export const RepliesSchema = z.object({
     .describe(`Exactly ${REPLY_COUNT} different likely replies`),
 });
 export type Replies = z.infer<typeof RepliesSchema>;
+
+// ---- Feedback ----
+
+/**
+ * POST /api/feedback: a 👍/👎 on one message. Deliberately carries no text (no name, details or
+ * message) — only the answer categories, so ratings can be compared per ending, reason, tone, …
+ */
+export const FeedbackSchema = z.object({
+  vote: z.enum(["up", "down"]),
+  ending: EndingSchema,
+  duration: DurationSchema,
+  reason: ReasonSchema,
+  tone: ToneSchema,
+  medium: MediumSchema,
+  /** The user edited or rewrote the message before voting. */
+  changed: z.boolean(),
+  safetyConcern: z.boolean(),
+});
+export type Feedback = z.infer<typeof FeedbackSchema>;

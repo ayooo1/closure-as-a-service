@@ -1,6 +1,14 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { GenerationError, mailtoHref, smsHref, streamGeneration, streamRefine, streamReplies } from "./generation";
+import {
+  GenerationError,
+  mailtoHref,
+  sendFeedback,
+  smsHref,
+  streamGeneration,
+  streamRefine,
+  streamReplies,
+} from "./generation";
 
 const INPUT = { duration: "1-3-years", reason: "different-goals", tone: "warm", medium: "text" } as const;
 const FULL = JSON.stringify({
@@ -156,5 +164,29 @@ describe("share links", () => {
 
   it("builds a mailto: link with the message encoded, keeping line breaks", () => {
     expect(mailtoHref("Hi,\n\nBye")).toBe("mailto:?body=Hi%2C%0A%0ABye");
+  });
+});
+
+describe("sendFeedback", () => {
+  const vote = {
+    vote: "up",
+    ending: "friendship",
+    duration: "1-3-years",
+    reason: "grown-apart",
+    tone: "warm",
+    medium: "text",
+    changed: false,
+    safetyConcern: false,
+  } as const;
+
+  it("POSTs with keepalive so it survives navigating away", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    expect(await sendFeedback(vote, fetchImpl)).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledWith("/api/feedback", expect.objectContaining({ method: "POST", keepalive: true }));
+  });
+
+  it("reports failure instead of throwing", async () => {
+    expect(await sendFeedback(vote, vi.fn().mockResolvedValue(new Response("{}", { status: 503 })))).toBe(false);
+    expect(await sendFeedback(vote, vi.fn().mockRejectedValue(new TypeError("offline")))).toBe(false);
   });
 });

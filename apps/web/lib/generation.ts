@@ -1,5 +1,6 @@
 import { Allow, parse } from "partial-json";
 import type {
+  Feedback,
   Generation,
   QuestionnaireInput,
   RefineRequest,
@@ -134,4 +135,19 @@ export function smsHref(message: string): string {
 
 export function mailtoHref(message: string): string {
   return `mailto:?body=${encodeURIComponent(message)}`;
+}
+
+/** Fire-and-forget 👍/👎. Returns whether it was recorded; failures are never shown to the user. */
+export async function sendFeedback(feedback: Feedback, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const res = await fetchImpl("/api/feedback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(feedback),
+      keepalive: true, // still delivered if the user navigates away right after voting
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

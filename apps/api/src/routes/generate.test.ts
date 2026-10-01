@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GenerationCache } from "../lib/cache.js";
 import type { TextGenerator } from "../lib/generator.js";
-import { GenerationSchema, RefinedSchema, RepliesSchema } from "@caas/shared";
+import { GenerationSchema, RefinedSchema, RepliesSchema, type Feedback } from "@caas/shared";
 import { REFINE_SYSTEM_PROMPT, REPLIES_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../lib/prompt.js";
 import { failingGenerator, SAMPLE_GENERATION, streamingGenerator } from "../testing/fake-generator.js";
 import { generateRoutes, type GenerateDeps } from "./generate.js";
@@ -20,6 +20,11 @@ function memoryCache(initial: Record<string, string> = {}) {
   } satisfies GenerationCache & { store: Map<string, string> };
 }
 
+function memoryFeedback() {
+  const recorded: { feedback: Feedback; modelId: string }[] = [];
+  return { recorded, record: vi.fn(async (feedback: Feedback, modelId: string) => void recorded.push({ feedback, modelId })) };
+}
+
 async function build(deps: Partial<GenerateDeps> = {}) {
   const app = Fastify();
   await app.register(generateRoutes, {
@@ -27,6 +32,7 @@ async function build(deps: Partial<GenerateDeps> = {}) {
     generate: deps.generate ?? streamingGenerator(SAMPLE_JSON),
     modelId: deps.modelId ?? "claude-haiku-4-5:default",
     cache: deps.cache ?? memoryCache(),
+    feedback: deps.feedback ?? memoryFeedback(),
   });
   return app;
 }
@@ -276,5 +282,61 @@ describe("follow-ups", () => {
     app = await build({ generate: failingGenerator() });
     const res = await send(url, { questionnaire: QUESTIONNAIRE, message: MESSAGE, refinement: "shorter" });
     expect(res.statusCode).toBe(502);
+  });
+});
+
+describe("POST /api/feedback", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+
+  const VOTE = {
+    vote: "up",
+    ending: "relationship",
+    duration: "1-3-years",
+    reason: "different-goals",
+    tone: "warm",
+    medium: "text",
+    changed: false,
+    safetyConcern: false,
+  };
+
+  it("records the vote with the model, and replies 204", async () => {
+    const feedback = memoryFeedback();
+    app = await build({ feedback, modelId: "claude-opus-5-5:default" });
+
+    const res = await app.inject({ method: "POST", url: "/api/feedback", payload: VOTE });
+    expect(res.statusCode).toBe(204);
+    expect(feedback.recorded).toEqual([{ feedback: VOTE, modelId: "claude-opus-5-5:default" }]);
+  });
+
+  it("never records text, even if a client sends some", async () => {
+    const feedback = memoryFeedback();
+    app = await build({ feedback });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/feedback",
+      payload: { ...VOTE, name: "Sam", details: "private", message: "Sam, it's over." },
+    });
+    expect(JSON.stringify(feedback.recorded)).not.toMatch(/Sam|private|over/);
+  });
+
+  it.each([
+    ["an unknown vote", { ...VOTE, vote: "meh" }, "vote"],
+    ["a missing category", { ...VOTE, tone: undefined }, "tone"],
+  ])("rejects %s with 400", async (_label, payload, field) => {
+    const feedback = memoryFeedback();
+    app = await build({ feedback });
+
+    const res = await app.inject({ method: "POST", url: "/api/feedback", payload });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ issues: { path: string }[] }>().issues.map((i) => i.path)).toContain(field);
+    expect(feedback.record).not.toHaveBeenCalled();
+  });
+
+  it("replies 503 when the store is unavailable", async () => {
+    app = await build({ feedback: { record: vi.fn().mockRejectedValue(new Error("Connection is closed.")) } });
+    const res = await app.inject({ method: "POST", url: "/api/feedback", payload: VOTE });
+    expect(res.statusCode).toBe(503);
   });
 });
