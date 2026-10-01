@@ -24,7 +24,9 @@ This project is also a **full-stack and cloud-native showcase**: a Next.js front
 - **Safety check**: if the details suggest the user may be at risk, messages become short and final, and the page shows safety guidance and helplines
 - **Privacy by default**: answers that include a name or personal details are never cached or stored; practice conversations aren't stored
 - **Redis-backed rate limiting**: per-IP limits shared across every API replica
-- **Prompt result caching**: identical answers without personal text are served from Redis
+- **Result caching**: identical answers without personal text are served from Redis in milliseconds, and so are
+  follow-ups (rewrites, likely replies, the opening practice reply, note-free logistics) on a message we wrote for them
+- **Usage logging**: every model call logs its time to first token, total time and token counts
 - **Production Kubernetes setup**: Deployments, Services, ConfigMap/Secret, Ingress and HPA
 
 ## 🏗️ Architecture
@@ -127,6 +129,21 @@ On an existing cluster, use the images CI publishes; see [`k8s/README.md`](k8s/R
 Kubernetes manifest validation and Docker image builds. When all of that passes on `main`, both images are pushed to
 GitHub Container Registry as `ghcr.io/ayooo1/caas-{api,web}`, tagged `sha-<commit>` and `latest`.
 
+### Releases
+
+Cut a release from an up-to-date `main`:
+
+```bash
+npm run release              # next patch version, e.g. v0.1.0 -> v0.1.1
+npm run release -- minor     # or major, or an explicit version like v0.2.0-rc.1 (a pre-release)
+```
+
+The script shows what changed since the last release, asks to confirm, then tags `main` and pushes the tag. CI runs
+every check on the tag, publishes the images tagged with the version (`0.2.0`, and `0.2` for the newest patch), and
+creates a [GitHub Release](https://github.com/ayooo1/closure-as-a-service/releases) with notes from the merged pull
+requests and `caas-v0.2.0.yaml`, a single manifest that deploys exactly that version
+(see [`k8s/README.md`](k8s/README.md#deploy-a-release)). The API reports its version at `GET /healthz`.
+
 See [`k8s/README.md`](k8s/README.md) for Minikube / k3d / Kind specifics.
 
 ## 🔌 API
@@ -145,7 +162,9 @@ details, so they're never cached).
 
 `ending` is optional and defaults to `relationship`; each ending accepts its own set of reasons.
 
-Follow-ups on one chosen message (rate limited the same way, never cached):
+Follow-ups on one chosen message (rate limited the same way). They're cached only when they hold nothing personal:
+the answers have no name or details, and the message is word for word one of the cached variations (so not edited).
+Practice is cached for its opening reply only, and logistics only without `notes`.
 
 | Endpoint | Body | Streams |
 | --- | --- | --- |
@@ -169,7 +188,7 @@ and returns 204. It records counts per day in Redis and never any text; see `scr
 
 | `AI_MODEL` | Use it for |
 | --- | --- |
-| `claude-haiku-4-5` (default) | Fast, low-cost generations (~2.5s to first token, ~6s total) |
+| `claude-haiku-4-5` (default) | Fast, low-cost generations (~1-1.5s to first token; ~2s for a rewrite, ~7s for three emails) |
 | `claude-opus-5-5` | The most thoughtful writing (~2-3s to first token, ~8s total, ~4x the cost). Gets server-side refusal fallbacks automatically; set `AI_EFFORT` to tune depth |
 
 Set it in [`k8s/configmap.yaml`](k8s/configmap.yaml) (or `.env` locally). The response cache is keyed per model, so switching never serves the other model's output.
@@ -178,7 +197,7 @@ Set it in [`k8s/configmap.yaml`](k8s/configmap.yaml) (or `.env` locally). The re
 
 | Service | Endpoint | Purpose |
 | --- | --- | --- |
-| api | `GET /healthz` | Liveness: the process is responsive |
+| api | `GET /healthz` | Liveness: the process is responsive; also reports the release `version` |
 | api | `GET /readyz` | Readiness: Redis is reachable |
 | web | `GET /healthz` | Liveness and readiness |
 

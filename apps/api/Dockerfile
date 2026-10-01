@@ -36,6 +36,9 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api/dist ./dist
 # "type": "module" so Node loads dist/index.js as ESM
 COPY apps/api/package.json ./package.json
+# Set by CI from the release tag; last, so a new version doesn't invalidate the layers above.
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
 USER node
 EXPOSE 4000
 CMD ["node", "dist/index.js"]

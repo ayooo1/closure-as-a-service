@@ -38,8 +38,8 @@ function memoryFeedback() {
   return { recorded, record: vi.fn(async (feedback: Feedback, modelId: string) => void recorded.push({ feedback, modelId })) };
 }
 
-async function build(deps: Partial<GenerateDeps> = {}) {
-  const app = Fastify();
+async function build(deps: Partial<GenerateDeps> = {}, logs?: string[]) {
+  const app = Fastify(logs ? { logger: { stream: { write: (line: string) => void logs.push(line) } } } : {});
   await app.register(generateRoutes, {
     prefix: "/api",
     generate: deps.generate ?? streamingGenerator(SAMPLE_JSON),
@@ -166,6 +166,18 @@ describe("POST /api/generate", () => {
     expect(cache.set).not.toHaveBeenCalled();
   });
 
+  it("logs latency and token usage for each finished generation", async () => {
+    const logs: string[] = [];
+    app = await build({}, logs);
+    await post(app, VALID);
+
+    await vi.waitFor(() => expect(logs.some((l) => l.includes("generation finished"))).toBe(true));
+    const line = JSON.parse(logs.find((l) => l.includes("generation finished"))!) as Record<string, unknown>;
+    expect(line).toMatchObject({ url: "/api/generate", stopReason: "end_turn", inputTokens: 100, outputTokens: SAMPLE_JSON.length });
+    expect(line.firstTokenMs).toEqual(expect.any(Number));
+    expect(line.totalMs).toEqual(expect.any(Number));
+  });
+
   it("returns 502 when the API call fails before any output", async () => {
     const cache = memoryCache();
     app = await build({ cache, generate: failingGenerator() });
@@ -179,7 +191,7 @@ describe("POST /api/generate", () => {
   it("returns 502 when the model produces no output", async () => {
     // eslint-disable-next-line require-yield -- ends without output, like a pre-output refusal
     const empty: TextGenerator = async function* () {
-      return "refusal";
+      return { stopReason: "refusal" };
     };
     app = await build({ generate: empty });
 
@@ -240,7 +252,7 @@ describe("follow-ups", () => {
   const send = (url: string, payload: unknown) =>
     app!.inject({ method: "POST", url, payload: payload as object });
 
-  it("POST /api/refine streams a rewritten message, never cached", async () => {
+  it("POST /api/refine streams a rewritten message, uncached when the answers are personal", async () => {
     const cache = memoryCache();
     const generate = streamingGenerator(REFINED_JSON);
     app = await build({ cache, generate });
@@ -259,7 +271,7 @@ describe("follow-ups", () => {
     expect(cache.set).not.toHaveBeenCalled();
   });
 
-  it("POST /api/replies streams likely replies with suggested responses, never cached", async () => {
+  it("POST /api/replies streams likely replies with suggested responses, uncached when personal", async () => {
     const cache = memoryCache();
     const generate = streamingGenerator(REPLIES_JSON);
     app = await build({ cache, generate });
@@ -360,7 +372,7 @@ describe("POST /api/logistics", () => {
   const LOGISTICS_JSON = JSON.stringify({ message: "Could you let me know when suits you to pick up your things?" });
   const QUESTIONNAIRE = { ...VALID, name: "Sam" };
 
-  it("streams a practical follow-up for the chosen topics, never cached", async () => {
+  it("streams a practical follow-up for the chosen topics, uncached when personal", async () => {
     const cache = memoryCache();
     const generate = streamingGenerator(LOGISTICS_JSON);
     app = await build({ cache, generate });
@@ -417,7 +429,7 @@ describe("POST /api/practice", () => {
   const practise = (payload: unknown) => app!.inject({ method: "POST", url: "/api/practice", payload: payload as object });
   const turns = (n: number) => Array.from({ length: n }, (_, i) => ({ role: i % 2 === 0 ? "them" : "you", text: `line ${i}` }));
 
-  it("streams the other person's next reply, never cached", async () => {
+  it("streams the other person's next reply, uncached when personal", async () => {
     const cache = memoryCache();
     const generate = streamingGenerator(REPLY_JSON);
     app = await build({ cache, generate });
@@ -447,5 +459,102 @@ describe("POST /api/practice", () => {
     const res = await practise({ ...base, turns: badTurns });
     expect(res.statusCode).toBe(400);
     expect(generate.calls).toHaveLength(0);
+  });
+});
+
+describe("follow-up caching", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+
+  const REPLIES_JSON = JSON.stringify({ replies: [{ theySay: "Why?", youCanSay: "I've thought about it a lot." }] });
+  const ours = SAMPLE_GENERATION.variations[1]!.message;
+
+  /** An app whose cache already holds the anonymous generation for VALID. */
+  async function withCachedGeneration(generate: TextGenerator) {
+    const cache = memoryCache();
+    app = await build({ cache, generate: streamingGenerator(SAMPLE_JSON) });
+    await post(app, VALID);
+    await vi.waitFor(() => expect(cache.set).toHaveBeenCalledOnce());
+    await app.close();
+    app = await build({ cache, generate });
+    return cache;
+  }
+
+  const send = (url: string, payload: object) => app!.inject({ method: "POST", url, payload });
+
+  it.each([
+    ["/api/replies", { message: ours }],
+    ["/api/refine", { message: ours, refinement: "shorter" }],
+    ["/api/practice", { message: ours, turns: [] }],
+  ])("caches %s for a message we wrote for anonymous answers", async (url, body) => {
+    const generate = streamingGenerator(REPLIES_JSON);
+    await withCachedGeneration(generate);
+    const payload = { questionnaire: VALID, ...body };
+
+    const first = await send(url, payload);
+    expect(first.headers["x-cache"]).toBe("miss");
+    expect(generate.calls).toHaveLength(1);
+  });
+
+  it("serves a repeat follow-up from the cache without calling the model", async () => {
+    const generate = streamingGenerator(REPLIES_JSON);
+    const cache = await withCachedGeneration(generate);
+    const payload = { questionnaire: VALID, message: ours };
+
+    await send("/api/replies", payload);
+    await vi.waitFor(() => expect(cache.set).toHaveBeenCalledTimes(2));
+    const second = await send("/api/replies", payload);
+
+    expect(second.headers["x-cache"]).toBe("hit");
+    expect(JSON.parse(second.body)).toEqual(JSON.parse(REPLIES_JSON));
+    expect(generate.calls).toHaveLength(1);
+    expect([...cache.store.keys()].filter((k) => k.startsWith("caas:replies:"))).toHaveLength(1);
+  });
+
+  it.each([
+    ["an edited message", { questionnaire: VALID, message: `${ours} Take care, Sam.` }],
+    ["personal answers", { questionnaire: { ...VALID, name: "Sam" }, message: ours }],
+  ])("never caches a follow-up with %s", async (_label, payload) => {
+    const generate = streamingGenerator(REPLIES_JSON);
+    const cache = await withCachedGeneration(generate);
+
+    const res = await send("/api/replies", payload);
+    expect(res.headers["x-cache"]).toBe("skip");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(cache.set).toHaveBeenCalledOnce(); // only the generation
+  });
+
+  it("doesn't cache a follow-up when the generation isn't cached (expired, or never ours)", async () => {
+    app = await build({ generate: streamingGenerator(REPLIES_JSON) });
+    const res = await send("/api/replies", { questionnaire: VALID, message: ours });
+    expect(res.headers["x-cache"]).toBe("skip");
+  });
+
+  it("never caches practice turns after the opening, which hold the user's own words", async () => {
+    const generate = streamingGenerator(REPLIES_JSON);
+    await withCachedGeneration(generate);
+    const res = await send("/api/practice", {
+      questionnaire: VALID,
+      message: ours,
+      turns: [
+        { role: "them", text: "Why?" },
+        { role: "you", text: "I need to focus on myself." },
+      ],
+    });
+    expect(res.headers["x-cache"]).toBe("skip");
+  });
+
+  it("caches logistics only for anonymous answers without notes", async () => {
+    const logistics = JSON.stringify({ message: "Could you let me know a good time to pick up my things?" });
+    const generate = streamingGenerator(logistics);
+    const cache = memoryCache();
+    app = await build({ cache, generate });
+    const payload = { questionnaire: VALID, topics: ["belongings"] };
+
+    expect((await send("/api/logistics", payload)).headers["x-cache"]).toBe("miss");
+    await vi.waitFor(() => expect(cache.set).toHaveBeenCalledOnce());
+    expect((await send("/api/logistics", payload)).headers["x-cache"]).toBe("hit");
+    expect((await send("/api/logistics", { ...payload, notes: "My bike is in the shed" })).headers["x-cache"]).toBe("skip");
+    expect(generate.calls).toHaveLength(2);
   });
 });

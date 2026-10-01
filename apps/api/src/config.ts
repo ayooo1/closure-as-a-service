@@ -23,6 +23,8 @@ const EnvSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   RATE_LIMIT_WINDOW: z.string().default("1 minute"),
   CACHE_TTL_SECONDS: z.coerce.number().int().nonnegative().default(3600),
+  // Baked into release images by CI (e.g. "1.2.0"); reported by /healthz.
+  APP_VERSION: z.string().min(1).default("dev"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

@@ -18,7 +18,8 @@
     "lint": "eslint .",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "k8s:render": "kubectl kustomize k8s"
+    "k8s:render": "kubectl kustomize k8s",
+    "release": "./scripts/release.sh"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

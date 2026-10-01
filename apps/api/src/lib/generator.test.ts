@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GenerationSchema, RepliesSchema } from "@caas/shared";
-import { createClaudeGenerator } from "./generator.js";
+import { createClaudeGenerator, type GenerationOutcome } from "./generator.js";
 
 // A stand-in for client.beta.messages.stream: replays SSE events, then resolves the final message.
 function fakeClient(events: object[], stopReason = "end_turn") {
@@ -8,7 +8,7 @@ function fakeClient(events: object[], stopReason = "end_turn") {
     async *[Symbol.asyncIterator]() {
       for (const e of events) yield e;
     },
-    finalMessage: async () => ({ stop_reason: stopReason }),
+    finalMessage: async () => ({ stop_reason: stopReason, usage: { input_tokens: 120, output_tokens: 45 } }),
   }));
   return { client: { beta: { messages: { stream } } } as never, stream };
 }
@@ -16,15 +16,15 @@ function fakeClient(events: object[], stopReason = "end_turn") {
 const textDelta = (text: string) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } });
 const req = { system: "sys", prompt: "prompt", schema: GenerationSchema, signal: new AbortController().signal };
 
-async function drain(gen: AsyncGenerator<string, string | null>) {
+async function drain(gen: AsyncGenerator<string, GenerationOutcome>) {
   const chunks: string[] = [];
   let next = await gen.next();
   for (; !next.done; next = await gen.next()) chunks.push(next.value);
-  return { chunks, stopReason: next.value };
+  return { chunks, stopReason: next.value.stopReason, usage: next.value.usage };
 }
 
 describe("createClaudeGenerator", () => {
-  it("yields only text deltas and returns the stop reason", async () => {
+  it("yields only text deltas and returns the stop reason and token usage", async () => {
     const { client } = fakeClient([
       { type: "message_start", message: {} },
       { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
@@ -34,7 +34,11 @@ describe("createClaudeGenerator", () => {
       { type: "message_stop" },
     ]);
     const result = await drain(createClaudeGenerator(client, "claude-haiku-4-5")(req));
-    expect(result).toEqual({ chunks: ['{"variations":', "[]}"], stopReason: "end_turn" });
+    expect(result).toEqual({
+      chunks: ['{"variations":', "[]}"],
+      stopReason: "end_turn",
+      usage: { inputTokens: 120, outputTokens: 45 },
+    });
   });
 
   it("passes the refusal stop reason through", async () => {
@@ -57,6 +61,7 @@ describe("createClaudeGenerator", () => {
     expect(params.output_config).not.toHaveProperty("effort");
     expect(params).not.toHaveProperty("fallbacks");
     expect(params).not.toHaveProperty("betas");
+    expect(params.max_tokens).toBe(4096);
     expect(options.signal).toBe(req.signal);
   });
 
