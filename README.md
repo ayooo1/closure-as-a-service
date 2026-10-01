@@ -88,7 +88,8 @@ The Next.js dev server proxies `/api/*` to the Fastify API, so the browser alway
 ### Tests
 
 ```bash
-npm test                        # unit + HTTP tests (Vitest, Fastify inject — no Redis or OpenAI needed)
+npm test                        # unit + HTTP tests (Vitest, Fastify inject, mock model — no Redis or OpenAI needed)
+REDIS_TEST_URL=redis://localhost:6379 npm test   # also run the cross-replica rate-limit test
 npm run lint                    # ESLint (type-aware TS rules + Next.js rules for apps/web)
 npm run typecheck
 npm run k8s:render              # render the Kustomize manifests
@@ -118,6 +119,27 @@ GitHub Container Registry as `ghcr.io/ayooo1/caas-{api,web}`, tagged `sha-<commi
 
 See [`k8s/README.md`](k8s/README.md) for Minikube / k3d / Kind specifics.
 
+## 🔌 API
+
+`POST /api/generate` (rate limited per client IP, shared across replicas via Redis)
+
+```json
+{ "duration": "1-3-years", "reason": "different-goals", "tone": "warm", "medium": "text",
+  "name": "Sam", "details": "optional context, up to 500 chars" }
+```
+
+Valid values for each field live in [`packages/shared/src/validations.ts`](packages/shared/src/validations.ts).
+The response is `text/plain`: the JSON object `{ "variations": [{ "angle", "message" }, …] }`, streamed
+token by token on a cache miss (`x-cache: miss`) or sent whole on a hit (`x-cache: hit`).
+
+| Status | Meaning |
+| --- | --- |
+| 200 | Generation (streamed or cached) |
+| 400 | Invalid questionnaire; `issues` lists the offending fields |
+| 413 | Body over 4 KB |
+| 429 | Rate limit exceeded |
+| 502 | The model provider failed before producing output |
+
 ## 🩺 Health endpoints
 
 | Service | Endpoint | Purpose |
@@ -129,11 +151,11 @@ See [`k8s/README.md`](k8s/README.md) for Minikube / k3d / Kind specifics.
 ## 🗺️ Roadmap
 
 - [x] Monorepo scaffold, shared package, API and web skeletons
-- [ ] Zod questionnaire schema and types
-- [ ] Prompt engineering and streaming `/api/generate` route
+- [x] Zod questionnaire schema and types
+- [x] Prompt engineering and streaming `/api/generate` route
 - [ ] Wizard UI and streaming result cards
-- [ ] Dockerfiles and docker-compose
-- [ ] Kubernetes manifests (Deployments, Services, ConfigMap, Secret, Ingress, HPA)
+- [x] Dockerfiles and docker-compose
+- [x] Kubernetes manifests (Deployments, Services, ConfigMap, Secret, Ingress, HPA)
 - [x] CI: lint, typecheck, image build and push
 
 ## 📄 License
