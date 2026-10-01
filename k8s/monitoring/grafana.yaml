@@ -42,9 +42,11 @@ spec:
           readinessProbe:
             httpGet: { path: /api/health, port: http }
             periodSeconds: 5
+          # Grafana 13 sits at ~230 MiB idle (its Prometheus plugin runs as a second process) and spikes when a
+          # dashboard runs all its queries at once; 384 MiB got it OOM-killed.
           resources:
-            requests: { cpu: 50m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 384Mi }
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 768Mi }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

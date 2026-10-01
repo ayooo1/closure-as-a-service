@@ -76,6 +76,15 @@ monitoring() {
   grafana
 }
 
+# kubectl port-forward exits whenever the pod behind the Service is replaced (a rollout, or a restart
+# after a crash), so keep reconnecting until stopped.
+forward() {
+  while true; do
+    kubectl -n monitoring port-forward "svc/$1" "$2" >/dev/null 2>&1 || true
+    sleep 1
+  done
+}
+
 grafana() {
   local port
   for port in 3001 9090; do
@@ -86,10 +95,14 @@ grafana() {
   done
   echo
   echo "✓ Grafana: http://localhost:3001  ·  Prometheus: http://localhost:9090  (Ctrl-C to stop)"
-  kubectl -n monitoring port-forward svc/grafana 3001:3000 >/dev/null &
-  local grafana_pid=$!
-  trap 'kill "$grafana_pid" 2>/dev/null' EXIT
-  kubectl -n monitoring port-forward svc/prometheus 9090:9090 >/dev/null
+  forward grafana 3001:3000 &
+  local grafana_loop=$!
+  forward prometheus 9090:9090 &
+  local prometheus_loop=$!
+  # Stop the loops and the kubectl each one is running.
+  trap 'for p in '"$grafana_loop $prometheus_loop"'; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done' EXIT
+  trap 'exit 130' INT TERM
+  wait
 }
 
 case "${1:-up}" in
