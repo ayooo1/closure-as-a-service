@@ -4,7 +4,7 @@ import type { NextConfig } from "next";
 const monorepoRoot = path.resolve(process.cwd(), "../..");
 
 const nextConfig: NextConfig = {
-  // Self-contained server bundle for a small Docker image (step 4).
+  // Self-contained server bundle for a small Docker image.
   output: "standalone",
   // Trace files from the monorepo root so workspace packages land in the bundle.
   outputFileTracingRoot: monorepoRoot,

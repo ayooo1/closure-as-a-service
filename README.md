@@ -157,16 +157,6 @@ Set it in [`k8s/configmap.yaml`](k8s/configmap.yaml) (or `.env` locally). The re
 | api | `GET /readyz` | Readiness: Redis is reachable |
 | web | `GET /healthz` | Liveness and readiness |
 
-## 🗺️ Roadmap
-
-- [x] Monorepo scaffold, shared package, API and web skeletons
-- [x] Zod questionnaire schema and types
-- [x] Prompt engineering and streaming `/api/generate` route
-- [x] Wizard UI and streaming result cards
-- [x] Dockerfiles and docker-compose
-- [x] Kubernetes manifests (Deployments, Services, ConfigMap, Secret, Ingress, HPA)
-- [x] CI: lint, typecheck, image build and push
-
 ## 📄 License
 
 [MIT](LICENSE) © 2026 Ayo Osonowo
