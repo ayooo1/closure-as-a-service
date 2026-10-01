@@ -26,7 +26,8 @@ This project is also a **full-stack and cloud-native showcase**: a Next.js front
 - **Redis-backed rate limiting**: per-IP limits shared across every API replica
 - **Result caching**: identical answers without personal text are served from Redis in milliseconds, and so are
   follow-ups (rewrites, likely replies, the opening practice reply, note-free logistics) on a message we wrote for them
-- **Usage logging**: every model call logs its time to first token, total time and token counts
+- **Usage logging and metrics**: every model call logs its time to first token, total time and token counts, and the
+  API exports Prometheus metrics, with a ready-made Grafana dashboard and alerts
 - **Production Kubernetes setup**: Deployments, Services, ConfigMap/Secret, Ingress and HPA
 
 ## 🏗️ Architecture
@@ -200,6 +201,27 @@ Set it in [`k8s/configmap.yaml`](k8s/configmap.yaml) (or `.env` locally). The re
 | api | `GET /healthz` | Liveness: the process is responsive; also reports the release `version` |
 | api | `GET /readyz` | Readiness: Redis is reachable |
 | web | `GET /healthz` | Liveness and readiness |
+
+## 📈 Metrics
+
+The API serves Prometheus metrics at `GET /metrics` on each pod. It's reachable only inside the cluster: the Ingress
+routes just `/api/*` to the API. Every series carries `model` and `version` labels.
+
+| Metric | What it tells you |
+| --- | --- |
+| `caas_http_request_duration_seconds` | Requests, latency and status codes per API route (429 = rate limited) |
+| `caas_generation_first_token_seconds` | How long users wait before text starts appearing |
+| `caas_generation_duration_seconds` | Time until the whole answer has streamed |
+| `caas_generations_total{result}` | Model calls: `ok`, `incomplete` (cut off, refused or invalid), `failed` (model error), `aborted` (user left) |
+| `caas_tokens_total{type}` | Billed input and output tokens, for spend |
+| `caas_cache_requests_total{result}` | `hit`, `miss`, or `skip` (personal, never cached) |
+| `caas_feedback_votes_total{vote, ending}` | 👍 / 👎 votes |
+| `nodejs_*`, `process_*` | Event loop lag, memory, CPU, GC |
+
+Locally, `./scripts/k8s-local.sh monitoring` deploys Prometheus and Grafana ([`k8s/monitoring`](k8s/monitoring)) and
+opens the **Closure as a Service** dashboard at http://localhost:3001: traffic, speed, cache hit rate, model failures,
+estimated spend and helpful votes. Prometheus (http://localhost:9090) also evaluates alert rules: API down, model
+calls failing, slow first token, unusual token use. `./scripts/k8s-local.sh grafana` reopens both later.
 
 ## 📄 License
 

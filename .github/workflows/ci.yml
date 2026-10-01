@@ -44,6 +44,9 @@ jobs:
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
           kubectl kustomize k8s | ./kubeconform -strict -summary -kubernetes-version 1.33.0 -
+          kubectl kustomize k8s/monitoring | ./kubeconform -strict -summary -kubernetes-version 1.33.0 -
+      - name: Check the Prometheus alert rules
+        run: docker run --rm -v "$PWD/k8s/monitoring/prometheus:/p" --entrypoint promtool prom/prometheus:v3.15.0 check rules /p/rules.yml
 
   # PRs: build only. Pushes to main and version tags: build and publish to GitHub Container
   # Registry, only after lint, typecheck, tests and manifest validation have passed.

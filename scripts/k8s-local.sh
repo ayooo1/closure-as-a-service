@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local Kubernetes workflow on k3d.  Usage: scripts/k8s-local.sh {up|deploy|status|down}
+# Local Kubernetes workflow on k3d.  Usage: scripts/k8s-local.sh {up|deploy|monitoring|grafana|status|down}
 set -euo pipefail
 
 CLUSTER=caas
@@ -60,10 +60,37 @@ deploy() {
   echo "✓ Ready: http://localhost:8080"
 }
 
+# Prometheus + Grafana in the "monitoring" namespace (k8s/monitoring), then opens Grafana.
+monitoring() {
+  kubectl apply -f k8s/monitoring/namespace.yaml >/dev/null
+  if ! kubectl -n monitoring get secret grafana-admin >/dev/null 2>&1; then
+    kubectl -n monitoring create secret generic grafana-admin \
+      --from-literal=password="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)" >/dev/null
+    echo "• Created the Grafana admin password (kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.password}' | base64 -d)"
+  fi
+  echo "• Applying monitoring manifests"
+  kubectl apply -k k8s/monitoring/
+  for d in prometheus grafana; do
+    kubectl -n monitoring rollout status "deployment/$d" --timeout=180s
+  done
+  grafana
+}
+
+grafana() {
+  echo
+  echo "✓ Grafana: http://localhost:3001  ·  Prometheus: http://localhost:9090  (Ctrl-C to stop)"
+  kubectl -n monitoring port-forward svc/grafana 3001:3000 >/dev/null &
+  local grafana_pid=$!
+  trap 'kill "$grafana_pid" 2>/dev/null' EXIT
+  kubectl -n monitoring port-forward svc/prometheus 9090:9090 >/dev/null
+}
+
 case "${1:-up}" in
   up)     need docker; need k3d; need kubectl; need npm; create_cluster; build_images; deploy ;;
   deploy) need docker; need k3d; need kubectl; build_images; deploy ;;
+  monitoring) need kubectl; monitoring ;;
+  grafana)    need kubectl; grafana ;;
   status) kubectl -n "$NS" get pods,svc,ingress,hpa -o wide ;;
   down)   k3d cluster delete "$CLUSTER" ;;
-  *)      echo "Usage: $0 {up|deploy|status|down}" >&2; exit 1 ;;
+  *)      echo "Usage: $0 {up|deploy|monitoring|grafana|status|down}" >&2; exit 1 ;;
 esac

@@ -1,0 +1,24 @@
+# Optional local monitoring: Prometheus scrapes the API pods, Grafana shows the "Closure as a Service" dashboard.
+#   ./scripts/k8s-local.sh monitoring   (then open http://localhost:3001)
+# In production, point your existing Prometheus at the same pod annotations instead (see k8s/README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# No top-level `namespace:`: it would also move the Role below out of the caas namespace, where
+# Prometheus needs it. Each resource names its namespace instead.
+labels:
+  - pairs: { app.kubernetes.io/part-of: caas-monitoring }
+resources:
+  - namespace.yaml
+  - prometheus.yaml
+  - grafana.yaml
+configMapGenerator:
+  # Hashed names: changing a file rolls the pod that mounts it.
+  - name: prometheus-config
+    namespace: monitoring
+    files: [prometheus.yml=prometheus/prometheus.yml, rules.yml=prometheus/rules.yml]
+  - name: grafana-provisioning
+    namespace: monitoring
+    files: [datasources.yaml=grafana/datasources.yaml, dashboards.yaml=grafana/dashboards.yaml]
+  - name: grafana-dashboards
+    namespace: monitoring
+    files: [caas.json=grafana/caas-dashboard.json]

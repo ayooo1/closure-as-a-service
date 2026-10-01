@@ -39,6 +39,17 @@ the controller sees the real client address:
   `LoadBalancer` Service, or enable PROXY protocol on both the cloud load balancer and the controller. Otherwise
   all traffic is limited as if it came from a handful of node IPs.
 
+## Monitoring
+
+`./scripts/k8s-local.sh monitoring` adds Prometheus and Grafana in a `monitoring` namespace. Prometheus discovers the
+API pods through their `prometheus.io/scrape`, `prometheus.io/port` and `prometheus.io/path` annotations, with read
+access to pods in `caas` only. Grafana is provisioned from Git (data source and dashboard), so it keeps no state; anyone
+can view, and the admin password is in the `grafana-admin` Secret.
+
+On a cluster that already runs Prometheus, skip `k8s/monitoring`. Scrape the same annotations (or add a
+`PodMonitor` for `app.kubernetes.io/name: api`, port `http`, path `/metrics`), then import
+`k8s/monitoring/grafana/caas-dashboard.json` and `k8s/monitoring/prometheus/rules.yml`.
+
 ## Deploy a release
 
 Each [GitHub Release](https://github.com/ayooo1/closure-as-a-service/releases) has a `caas-vX.Y.Z.yaml` asset: these
