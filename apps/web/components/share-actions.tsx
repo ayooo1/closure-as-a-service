@@ -4,29 +4,30 @@ import { useEffect, useState } from "react";
 import { Check, Copy, Mail, MessageSquare } from "lucide-react";
 import type { Medium } from "@caas/shared";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { copyText } from "@/lib/clipboard";
 import { mailtoHref, smsHref } from "@/lib/generation";
 
 export function CopyButton({ text, onCopy }: { text: string; onCopy?: () => void }) {
-  const [copied, setCopied] = useState(false);
+  const [result, setResult] = useState<"copied" | "failed" | null>(null);
   useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 2000);
+    if (!result) return;
+    const t = setTimeout(() => setResult(null), result === "copied" ? 2000 : 4000);
     return () => clearTimeout(t);
-  }, [copied]);
+  }, [result]);
 
   return (
     <Button
       variant="outline"
       size="sm"
       onClick={() => {
-        void navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          onCopy?.();
+        void copyText(text).then((ok) => {
+          setResult(ok ? "copied" : "failed");
+          if (ok) onCopy?.();
         });
       }}
     >
-      {copied ? <Check /> : <Copy />}
-      {copied ? "Copied" : "Copy"}
+      {result === "copied" ? <Check /> : <Copy />}
+      {result === "copied" ? "Copied" : result === "failed" ? "Select the text to copy" : "Copy"}
     </Button>
   );
 }

@@ -609,6 +609,26 @@ describe("practice conversation", () => {
     await resultCards();
     expect(screen.queryByRole("button", { name: /practise the conversation/i })).not.toBeInTheDocument();
   });
+
+  it("survives browsers whose scrollIntoView returns a Promise (current Chrome)", async () => {
+    // Regression: an expression-bodied effect returned this Promise as its "cleanup", crashing the page.
+    const scroll = vi.fn(() => Promise.resolve());
+    Object.defineProperty(Element.prototype, "scrollIntoView", { value: scroll, configurable: true, writable: true });
+    try {
+      const user = userEvent.setup();
+      fakeApi();
+      render(<ClosureApp />);
+      const panel = await openPractice(user);
+      await within(panel).findByText("Wait... where is this coming from?");
+      await user.type(within(panel).getByLabelText("Your reply"), "I'm sure.");
+      await user.click(within(panel).getByRole("button", { name: "Send reply" }));
+
+      expect(await within(panel).findByText("I guess I saw it coming.")).toBeInTheDocument();
+      expect(scroll).toHaveBeenCalled();
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+  });
 });
 
 describe("after you send it", () => {
@@ -714,5 +734,21 @@ describe("read aloud", () => {
     render(<ClosureApp />);
     await completeWizard(user);
     expect(within((await resultCards())[0]!).queryByRole("button", { name: "Read aloud" })).not.toBeInTheDocument();
+  });
+});
+
+describe("copy fallback", () => {
+  it("tells the user to select the text when copying isn't possible, without showing aftercare", async () => {
+    const user = userEvent.setup();
+    fakeApi();
+    render(<ClosureApp />);
+    await completeWizard(user);
+    const card = (await resultCards())[0]!;
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new DOMException("denied", "NotAllowedError"));
+    document.execCommand = vi.fn(() => false);
+
+    await user.click(within(card).getByRole("button", { name: "Copy" }));
+    expect(await within(card).findByRole("button", { name: "Select the text to copy" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "After you send it" })).not.toBeInTheDocument();
   });
 });

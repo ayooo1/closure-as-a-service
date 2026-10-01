@@ -72,7 +72,11 @@ export function PracticePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on open
   }, []);
 
-  useEffect(() => bottom.current?.scrollIntoView?.({ block: "nearest" }), [turns, reply.data.theySay]);
+  // Block body on purpose: newer browsers return a Promise from scrollIntoView, and an effect
+  // must return nothing or a cleanup function, or React crashes on unmount/re-run.
+  useEffect(() => {
+    void bottom.current?.scrollIntoView?.({ block: "nearest" });
+  }, [turns, reply.data.theySay]);
 
   function send() {
     const text = draft.trim();
