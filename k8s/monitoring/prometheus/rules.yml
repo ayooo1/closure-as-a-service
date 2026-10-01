@@ -1,0 +1,35 @@
+# Shown under Alerts in the Prometheus UI. Wire up Alertmanager to get notified.
+groups:
+  - name: caas
+    rules:
+      - alert: CaasApiDown
+        expr: absent(up{job="caas", app="api"} == 1)
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: No API pod is being scraped successfully.
+
+      - alert: CaasGenerationsFailing
+        # Errors from the model (bad key, quota, outage). Client disconnects ("aborted") don't count.
+        expr: |
+          sum(rate(caas_generations_total{result="failed"}[5m]))
+            / sum(rate(caas_generations_total[5m])) > 0.2
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of model calls are failing."
+
+      - alert: CaasSlowFirstToken
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(caas_generation_first_token_seconds_bucket[10m]))) > 5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 time to first token is {{ $value | humanizeDuration }}."
+
+      - alert: CaasHighTokenUse
+        # ~2M tokens an hour is roughly $4/hour on Haiku 4.5: far above normal traffic, so look for abuse.
+        expr: sum(increase(caas_tokens_total[1h])) > 2e6
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value | humanize }} tokens used in the last hour."

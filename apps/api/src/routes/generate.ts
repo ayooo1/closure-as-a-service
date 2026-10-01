@@ -17,6 +17,7 @@ import type { z } from "zod";
 import { cacheKey, type CacheKind, type GenerationCache } from "../lib/cache.js";
 import type { FeedbackStore } from "../lib/feedback.js";
 import type { TextGenerator } from "../lib/generator.js";
+import type { Metrics } from "../lib/metrics.js";
 import {
   buildLogisticsPrompt,
   buildPracticePrompt,
@@ -37,6 +38,7 @@ export interface GenerateDeps {
   modelId: string;
   cache: GenerationCache;
   feedback: FeedbackStore;
+  metrics: Metrics;
 }
 
 // rateLimit: {} opts in with the plugin-level max/window (Redis-backed, shared across replicas).
@@ -53,7 +55,7 @@ function invalid(error: z.ZodError) {
 // derived from them is cached: no benefit, and no reason to keep someone's story in Redis.
 const isPrivate = (q: Questionnaire) => Boolean(q.name || q.details);
 
-export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { generate, modelId, cache, feedback }) => {
+export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { generate, modelId, cache, feedback, metrics }) => {
   // Every response body is the route's schema as JSON text: complete on a cache hit, otherwise
   // streamed token by token. The client parses partial JSON as it arrives.
   app.addHook("onSend", async (_req, reply) => {
@@ -70,14 +72,21 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { ge
     key: string | null,
     opts: { system: string; prompt: string; schema: z.ZodType },
   ) {
+    const route = req.routeOptions.url ?? req.url;
     const cached = key ? await cache.get(key) : null;
-    if (cached) return reply.header("x-cache", "hit").type("text/plain; charset=utf-8").send(cached);
+    if (cached) {
+      metrics.observeCache(route, "hit");
+      return reply.header("x-cache", "hit").type("text/plain; charset=utf-8").send(cached);
+    }
 
-    reply.header("x-cache", key ? "miss" : "skip");
+    const result = key ? "miss" : "skip";
+    metrics.observeCache(route, result);
+    reply.header("x-cache", result);
     return streamStructured(req, reply, {
       generate,
       ...opts,
       onComplete: key ? (text) => void cache.set(key, text) : undefined,
+      onFinish: (observation) => metrics.observeGeneration({ route, ...observation }),
     });
   }
 
@@ -169,6 +178,7 @@ export const generateRoutes: FastifyPluginAsync<GenerateDeps> = async (app, { ge
     if (!parsed.success) return reply.code(400).send(invalid(parsed.error));
     try {
       await feedback.record(parsed.data, modelId);
+      metrics.observeVote(parsed.data.vote, parsed.data.ending);
     } catch (err) {
       req.log.warn({ err }, "feedback not recorded");
       return reply.code(503).send({ error: "unavailable" });

@@ -12,6 +12,11 @@ spec:
   template:
     metadata:
       labels: { app.kubernetes.io/name: api, app.kubernetes.io/part-of: caas }
+      # Prometheus scrapes GET /metrics on each pod (k8s/monitoring, or any Prometheus using these annotations).
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
+        prometheus.io/path: /metrics
     spec:
       terminationGracePeriodSeconds: 30
       automountServiceAccountToken: false

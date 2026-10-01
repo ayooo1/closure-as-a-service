@@ -4,7 +4,7 @@
 
 An AI-powered breakup message generator. Answer a short questionnaire about the relationship, the reason and the tone you want, and get **three distinct messages streamed in real time**, ready to copy, open in your SMS app, or tweak.
 
-This project is also a **full-stack and cloud-native showcase**: a Next.js frontend and a Fastify streaming API that share one Zod schema, with Redis for distributed rate limiting and caching. Everything is containerized with multi-stage Docker builds and deployed to Kubernetes with probes, autoscaling and path-based Ingress routing.
+This project is also a **full-stack and cloud-native showcase**: a Next.js frontend and a Fastify streaming API that share one Zod schema, with Redis for distributed rate limiting and caching. Everything is containerized with multi-stage Docker builds and deployed to Kubernetes with probes, autoscaling and path-based Ingress routing, monitored with Prometheus and Grafana, and released from version tags.
 
 ---
 
@@ -26,8 +26,14 @@ This project is also a **full-stack and cloud-native showcase**: a Next.js front
 - **Redis-backed rate limiting**: per-IP limits shared across every API replica
 - **Result caching**: identical answers without personal text are served from Redis in milliseconds, and so are
   follow-ups (rewrites, likely replies, the opening practice reply, note-free logistics) on a message we wrote for them
-- **Usage logging**: every model call logs its time to first token, total time and token counts
-- **Production Kubernetes setup**: Deployments, Services, ConfigMap/Secret, Ingress and HPA
+- **Usage logging and metrics**: every model call logs its time to first token, total time and token counts, and the
+  API exports Prometheus metrics, with a ready-made Grafana dashboard and alerts
+- **Production Kubernetes setup**: Deployments, Services, ConfigMap/Secret, Ingress, HPA, PodDisruptionBudgets,
+  a NetworkPolicy for Redis, hardened pods (non-root, read-only filesystem, seccomp) and persistent Redis
+- **Monitoring**: Prometheus scrapes the API; Grafana shows traffic, speed, cache hit rate, failures, estimated spend
+  and votes; alert rules flag outages, failures, slowness and unusual token use
+- **Versioned releases**: `npm run release` tags `main`; CI publishes versioned images and a GitHub Release with a
+  one-file deploy manifest
 
 ## 🏗️ Architecture
 
@@ -36,13 +42,21 @@ flowchart LR
     U[Browser] -->|HTTPS| I[Ingress]
     I -->|/| W[web<br/>Next.js]
     I -->|/api| A[api<br/>Fastify]
-    A -->|rate limit + cache| R[(Redis)]
+    A -->|rate limit + cache + votes| R[(Redis)]
     A -->|stream| O[Claude API]
+    P[Prometheus] -.->|scrape /metrics| A
+    G[Grafana] -.->|query| P
     subgraph K8s cluster
-      I
-      W
-      A
-      R
+      subgraph caas namespace
+        I
+        W
+        A
+        R
+      end
+      subgraph monitoring namespace
+        P
+        G
+      end
     end
 ```
 
@@ -51,8 +65,10 @@ flowchart LR
 | Frontend | Next.js (App Router), TypeScript, Tailwind CSS v4, shadcn/ui, Motion (Framer Motion), React Hook Form |
 | Backend | Node.js 22, Fastify 5, Anthropic TypeScript SDK (Claude) |
 | Shared | Zod schema + inferred types (`@caas/shared`) |
-| Data | Redis (rate limiting and response cache) |
-| Infra | Docker (multi-stage), docker-compose, Kubernetes (Minikube / k3d / Kind) |
+| Data | Redis (rate limiting, response cache, feedback counts; AOF persistence) |
+| Infra | Docker (multi-stage), docker-compose, Kubernetes (Minikube / k3d / Kind), Kustomize |
+| Observability | Prometheus (`prom-client` metrics, alert rules), Grafana dashboard, structured JSON logs (pino) |
+| CI/CD | GitHub Actions: lint, typecheck, tests, manifest validation, images to GHCR, tag-based releases |
 
 ## 📁 Project structure
 
@@ -61,19 +77,26 @@ flowchart LR
 ├── apps/
 │   ├── web/                    # Next.js frontend
 │   │   ├── app/                # App Router: layout, pages, /healthz probe
-│   │   ├── components/ui/      # shadcn/ui primitives
-│   │   ├── lib/                # utils, client helpers
+│   │   ├── components/         # wizard, results, practice, logistics, safety notice (+ ui/ shadcn primitives)
+│   │   ├── hooks/              # streaming JSON and speech hooks
+│   │   ├── lib/                # API client (streaming), clipboard, utils
 │   │   └── Dockerfile
 │   └── api/                    # Fastify streaming API
 │       ├── src/
 │       │   ├── config.ts       # Zod-validated env (fail fast on boot)
-│       │   ├── server.ts       # Fastify app: CORS, Redis rate limit, routes
-│       │   ├── routes/         # /healthz, /readyz, /api/generate
-│       │   └── lib/            # redis client, prompt builder, cache
+│       │   ├── server.ts       # Fastify app: CORS, Redis rate limit, metrics, routes
+│       │   ├── routes/         # /healthz, /readyz, /api/* (generate, follow-ups, feedback)
+│       │   └── lib/            # Claude generator, prompts, streaming, cache, feedback, metrics
 │       └── Dockerfile
 ├── packages/
 │   └── shared/                 # Zod schema + TS types used by web AND api
-├── k8s/                        # Kubernetes manifests
+├── k8s/                        # Kubernetes manifests (Kustomize)
+│   └── monitoring/             # optional Prometheus + Grafana, dashboard and alert rules
+├── scripts/
+│   ├── k8s-local.sh            # local k3d cluster: up, deploy, monitoring, grafana, status, down
+│   ├── release.sh              # cut a versioned release (npm run release)
+│   └── feedback-report.sh      # summarise 👍/👎 votes from Redis
+├── .github/workflows/ci.yml    # CI, image publishing and releases
 ├── docker-compose.yml          # One-command local stack
 └── .env.example
 ```
@@ -121,12 +144,22 @@ cp .env.example .env            # add ANTHROPIC_API_KEY; it becomes the caas-sec
 ./scripts/k8s-local.sh up       # cluster + images + deploy  →  http://localhost:8080
 ```
 
+| Command | What it does |
+| --- | --- |
+| `./scripts/k8s-local.sh up` | Create the k3d cluster, build the images and deploy |
+| `./scripts/k8s-local.sh deploy` | Rebuild the images and roll out the changes |
+| `./scripts/k8s-local.sh monitoring` | Deploy Prometheus and Grafana, then open them (see [Metrics](#-metrics)) |
+| `./scripts/k8s-local.sh grafana` | Reopen Grafana (http://localhost:3001) and Prometheus (http://localhost:9090); Ctrl-C stops |
+| `./scripts/k8s-local.sh status` | Show pods, services, Ingress and autoscalers |
+| `./scripts/k8s-local.sh down` | Delete the cluster |
+
 On an existing cluster, use the images CI publishes; see [`k8s/README.md`](k8s/README.md#deploy-the-published-images).
 
 ### CI
 
-[GitHub Actions](.github/workflows/ci.yml) runs on every pull request and push to `main`: lint, typecheck, tests,
-Kubernetes manifest validation and Docker image builds. When all of that passes on `main`, both images are pushed to
+[GitHub Actions](.github/workflows/ci.yml) runs on every pull request and push to `main`: lint, typecheck, tests
+(with a real Redis), validation of the app and monitoring manifests and the Prometheus alert rules, and Docker image
+builds. When all of that passes on `main`, both images are pushed to
 GitHub Container Registry as `ghcr.io/ayooo1/caas-{api,web}`, tagged `sha-<commit>` and `latest`.
 
 ### Releases
@@ -199,7 +232,45 @@ Set it in [`k8s/configmap.yaml`](k8s/configmap.yaml) (or `.env` locally). The re
 | --- | --- | --- |
 | api | `GET /healthz` | Liveness: the process is responsive; also reports the release `version` |
 | api | `GET /readyz` | Readiness: Redis is reachable |
+| api | `GET /metrics` | Prometheus metrics (in-cluster only; see [Metrics](#-metrics)) |
 | web | `GET /healthz` | Liveness and readiness |
+
+## 📈 Metrics
+
+The API serves Prometheus metrics at `GET /metrics` on each pod. It's reachable only inside the cluster: the Ingress
+routes just `/api/*` to the API. Every series carries `model` and `version` labels.
+
+| Metric | What it tells you |
+| --- | --- |
+| `caas_http_request_duration_seconds` | Requests, latency and status codes per API route (429 = rate limited) |
+| `caas_generation_first_token_seconds` | How long users wait before text starts appearing |
+| `caas_generation_duration_seconds` | Time until the whole answer has streamed |
+| `caas_generations_total{result}` | Model calls: `ok`, `incomplete` (cut off, refused or invalid), `failed` (model error), `aborted` (user left) |
+| `caas_tokens_total{type}` | Billed input and output tokens, for spend |
+| `caas_cache_requests_total{result}` | `hit`, `miss`, or `skip` (personal, never cached) |
+| `caas_feedback_votes_total{vote, ending}` | 👍 / 👎 votes |
+| `nodejs_*`, `process_*` | Event loop lag, memory, CPU, GC |
+
+Locally, `./scripts/k8s-local.sh monitoring` deploys Prometheus and Grafana ([`k8s/monitoring`](k8s/monitoring)) and
+opens the **Closure as a Service** dashboard at http://localhost:3001: traffic, speed, cache hit rate, model failures,
+estimated spend and helpful votes, plus memory, CPU and event loop lag per API pod. Pick a route at the top to filter,
+and set the token prices there if you switch models (the defaults are Haiku 4.5's $1 / $5 per million tokens).
+
+Anyone can view the dashboard; to edit it, sign in as `admin` with the password from
+`kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.password}' | base64 -d`. Dashboard changes made in the
+UI aren't saved: edit [`caas-dashboard.json`](k8s/monitoring/grafana/caas-dashboard.json) and re-run the command.
+
+Prometheus (http://localhost:9090) keeps 15 days of data and evaluates the [alert rules](k8s/monitoring/prometheus/rules.yml):
+
+| Alert | Fires when |
+| --- | --- |
+| `CaasApiDown` | No API pod has been scraped for 2 minutes |
+| `CaasGenerationsFailing` | Over 20% of model calls fail for 5 minutes (bad key, quota, outage) |
+| `CaasSlowFirstToken` | p95 time to first token is over 5 s for 10 minutes |
+| `CaasHighTokenUse` | Over 2M tokens in an hour (~$4/hour on Haiku): look for abuse |
+
+`./scripts/k8s-local.sh grafana` reopens both later. On a cluster with its own Prometheus, see
+[`k8s/README.md`](k8s/README.md#monitoring).
 
 ## 📄 License
 

@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GenerationCache } from "../lib/cache.js";
 import type { TextGenerator } from "../lib/generator.js";
+import { createMetrics } from "../lib/metrics.js";
 import {
   GenerationSchema,
   LogisticsSchema,
@@ -46,6 +47,7 @@ async function build(deps: Partial<GenerateDeps> = {}, logs?: string[]) {
     modelId: deps.modelId ?? "claude-haiku-4-5:default",
     cache: deps.cache ?? memoryCache(),
     feedback: deps.feedback ?? memoryFeedback(),
+    metrics: deps.metrics ?? createMetrics({ model: "test", version: "test" }),
   });
   return app;
 }
@@ -556,5 +558,76 @@ describe("follow-up caching", () => {
     expect((await send("/api/logistics", payload)).headers["x-cache"]).toBe("hit");
     expect((await send("/api/logistics", { ...payload, notes: "My bike is in the shed" })).headers["x-cache"]).toBe("skip");
     expect(generate.calls).toHaveLength(2);
+  });
+});
+
+describe("metrics", () => {
+  let app: Awaited<ReturnType<typeof build>> | undefined;
+  afterEach(() => app?.close());
+
+  const metricsFor = () => createMetrics({ model: "m", version: "v" });
+  const sample = async (metrics: ReturnType<typeof createMetrics>, name: string, labels: Record<string, string>) => {
+    const metric = await metrics.registry.getSingleMetric(name)?.get();
+    const match = metric?.values.find((v) => Object.entries(labels).every(([k, val]) => v.labels[k] === val));
+    return match?.value ?? 0;
+  };
+
+  it("records the cache result, outcome and tokens of a generation", async () => {
+    const metrics = metricsFor();
+    const cache = memoryCache();
+    app = await build({ metrics, cache });
+
+    await post(app, VALID);
+    await vi.waitFor(() => expect(cache.set).toHaveBeenCalledOnce());
+    await post(app, VALID);
+
+    const route = "/api/generate";
+    expect(await sample(metrics, "caas_cache_requests_total", { route, result: "miss" })).toBe(1);
+    expect(await sample(metrics, "caas_cache_requests_total", { route, result: "hit" })).toBe(1);
+    expect(await sample(metrics, "caas_generations_total", { route, result: "ok" })).toBe(1);
+    expect(await sample(metrics, "caas_tokens_total", { route, type: "input" })).toBe(100);
+    expect(await sample(metrics, "caas_tokens_total", { route, type: "output" })).toBe(SAMPLE_JSON.length);
+  });
+
+  it.each([
+    ["failed", failingGenerator()],
+    ["incomplete", streamingGenerator(SAMPLE_JSON, { stopReason: "max_tokens" })],
+  ] as const)("records %s generations", async (result, generate) => {
+    const metrics = metricsFor();
+    app = await build({ metrics, generate });
+    await post(app, VALID);
+    await vi.waitFor(async () =>
+      expect(await sample(metrics, "caas_generations_total", { route: "/api/generate", result })).toBe(1),
+    );
+  });
+
+  it("records a generation the client walked away from as aborted", async () => {
+    const metrics = metricsFor();
+    app = await build({ metrics, generate: streamingGenerator(SAMPLE_JSON, { parts: 20, delayMs: 50 }) });
+    const url = new URL(await app.listen({ port: 0, host: "127.0.0.1" }));
+
+    await new Promise<void>((resolve, reject) => {
+      const req = request(
+        { host: url.hostname, port: url.port, path: "/api/generate", method: "POST", headers: { "content-type": "application/json" } },
+        (res) => res.once("data", () => (req.destroy(), resolve())),
+      );
+      req.on("error", (err) => (req.destroyed ? undefined : reject(err)));
+      req.end(JSON.stringify(VALID));
+    });
+
+    await vi.waitFor(async () =>
+      expect(await sample(metrics, "caas_generations_total", { route: "/api/generate", result: "aborted" })).toBe(1),
+    );
+  });
+
+  it("counts votes by ending", async () => {
+    const metrics = metricsFor();
+    app = await build({ metrics });
+    await app.inject({
+      method: "POST",
+      url: "/api/feedback",
+      payload: { vote: "up", ending: "friendship", duration: "1-3-years", reason: "one-sided", tone: "warm", medium: "text", changed: false, safetyConcern: false },
+    });
+    expect(await sample(metrics, "caas_feedback_votes_total", { vote: "up", ending: "friendship" })).toBe(1);
   });
 });

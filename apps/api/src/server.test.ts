@@ -83,6 +83,23 @@ describe("buildServer", () => {
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toEqual(SAMPLE_GENERATION);
   });
+
+  it("serves Prometheus metrics with API request latency, leaving out probes", async () => {
+    app = await build({ APP_VERSION: "1.2.0" });
+    await app.inject({ method: "POST", url: "/api/generate", payload: { duration: "few-dates", reason: "other", tone: "warm", medium: "text" } });
+    await app.inject("/healthz");
+
+    const res = await app.inject("/metrics");
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/plain");
+    const count = res.body.split("\n").find((l) => l.startsWith("caas_http_request_duration_seconds_count{"));
+    for (const label of ['method="POST"', 'route="/api/generate"', 'status="200"', 'model="claude-haiku-4-5"', 'version="1.2.0"']) {
+      expect(count).toContain(label);
+    }
+    expect(count).toMatch(/ 1$/);
+    expect(res.body).not.toContain('route="/healthz"');
+    expect(res.body).not.toContain('route="/metrics"');
+  });
 });
 
 // Integration: run with a real Redis, e.g. REDIS_TEST_URL=redis://localhost:6379 npm test

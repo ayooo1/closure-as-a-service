@@ -5,6 +5,7 @@ import type { Redis } from "ioredis";
 import type { Env } from "./config.js";
 import { createCache } from "./lib/cache.js";
 import { createFeedbackStore } from "./lib/feedback.js";
+import { createMetrics } from "./lib/metrics.js";
 import type { TextGenerator } from "./lib/generator.js";
 import { generateRoutes } from "./routes/generate.js";
 import { healthRoutes } from "./routes/health.js";
@@ -40,6 +41,18 @@ export async function buildServer({ env, redis, generate, logger }: ServerDeps) 
 
   await app.register(healthRoutes, { redis, version: env.APP_VERSION });
 
+  const metrics = createMetrics({ model: env.AI_MODEL, version: env.APP_VERSION });
+  // Request latency for the API routes; probes and scrapes would only add noise.
+  app.addHook("onResponse", async (req, reply) => {
+    const route = req.routeOptions.url;
+    if (!route?.startsWith("/api/")) return;
+    metrics.observeRequest(req.method, route, reply.statusCode, reply.elapsedTime / 1000);
+  });
+  // Scraped by Prometheus inside the cluster. The Ingress only routes /api/* here, so it isn't public.
+  app.get("/metrics", { logLevel: "warn" }, async (_req, reply) =>
+    reply.type(metrics.registry.contentType).send(await metrics.registry.metrics()),
+  );
+
   const cache = createCache(redis, env.CACHE_TTL_SECONDS, (err) =>
     app.log.warn({ err }, "Generation cache unavailable"),
   );
@@ -50,6 +63,7 @@ export async function buildServer({ env, redis, generate, logger }: ServerDeps) 
     modelId,
     cache,
     feedback: createFeedbackStore(redis),
+    metrics,
   });
 
   return app;
